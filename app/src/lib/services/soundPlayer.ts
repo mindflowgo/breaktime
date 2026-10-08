@@ -2,10 +2,13 @@ import type { SoundPreset } from '$lib/types';
 
 let audioCtx: AudioContext | null = null;
 let currentMasterGain: GainNode | null = null;
+let activePlayTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function getAudioContext(): AudioContext {
 	if (!audioCtx) {
-		const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+		const AudioContextClass =
+			window.AudioContext ||
+			(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 		audioCtx = new AudioContextClass();
 	}
 	if (audioCtx.state === 'suspended') {
@@ -14,16 +17,43 @@ function getAudioContext(): AudioContext {
 	return audioCtx;
 }
 
+/**
+ * WKWebView starts AudioContexts in "suspended" state until a user gesture
+ * occurs. Call this from a pointerdown handler once per window so break
+ * sounds can play even when the overlay was never interacted with.
+ */
+export function warmUpAudioContext(): void {
+	if (typeof window === 'undefined') return;
+	try {
+		const ctx = getAudioContext();
+		if (ctx.state === 'suspended') {
+			void ctx.resume();
+		}
+	} catch (err) {
+		console.warn('[SoundPlayer] Audio warm-up failed:', err);
+	}
+}
+
 export function stopSound(): void {
+	if (activePlayTimeout) {
+		clearTimeout(activePlayTimeout);
+		activePlayTimeout = null;
+	}
+
 	if (currentMasterGain && audioCtx) {
 		try {
 			const now = audioCtx.currentTime;
 			currentMasterGain.gain.cancelScheduledValues(now);
 			currentMasterGain.gain.setValueAtTime(currentMasterGain.gain.value, now);
 			currentMasterGain.gain.linearRampToValueAtTime(0.0001, now + 0.08);
+			const gainToDisconnect = currentMasterGain;
 			setTimeout(() => {
-				currentMasterGain?.disconnect();
-				currentMasterGain = null;
+				try {
+					gainToDisconnect.disconnect();
+				} catch {}
+				if (currentMasterGain === gainToDisconnect) {
+					currentMasterGain = null;
+				}
 			}, 100);
 		} catch {
 			currentMasterGain = null;
@@ -32,7 +62,7 @@ export function stopSound(): void {
 }
 
 /**
- * Helper to play a single tone with envelope
+ * Play a single acoustic tone with attack/decay envelope and optional harmonic overtones
  */
 function playTone(
 	ctx: AudioContext,
@@ -43,7 +73,7 @@ function playTone(
 	decaySec: number,
 	peakGain: number = 0.5,
 	waveType: OscillatorType = 'sine',
-	harmonicOvertones: { mult: number; gain: number }[] = []
+	harmonicOvertones: { mult: number; gain: number; decayMult?: number }[] = []
 ) {
 	const osc = ctx.createOscillator();
 	const gain = ctx.createGain();
@@ -70,22 +100,34 @@ function playTone(
 		hOsc.frequency.setValueAtTime(freq * overtone.mult, startTime);
 
 		const hPeak = peakGain * overtone.gain;
+		const hDecay = decaySec * (overtone.decayMult ?? 0.7);
+
 		hGain.gain.setValueAtTime(0.0001, startTime);
 		hGain.gain.linearRampToValueAtTime(hPeak, startTime + attackSec);
-		hGain.gain.exponentialRampToValueAtTime(0.0001, startTime + attackSec + decaySec * 0.7);
+		hGain.gain.exponentialRampToValueAtTime(0.0001, startTime + attackSec + hDecay);
 
 		hOsc.connect(hGain);
 		hGain.connect(destination);
 
 		hOsc.start(startTime);
-		hOsc.stop(startTime + attackSec + decaySec + 0.1);
+		hOsc.stop(startTime + attackSec + hDecay + 0.1);
 	}
 }
 
+/**
+ * Play sound preset with Web Audio API synthesis
+ * @param preset One of 6 calm presets
+ * @param volume Master volume (0.0 to 1.0)
+ * @param fadeIn Whether to fade in gradually instead of sudden onset
+ * @param repeatCount Optional number of repetitions (default 1)
+ * @param repeatGapSec Gap between repetitions in seconds (default 1.2s)
+ */
 export async function playSound(
 	preset: SoundPreset,
 	volume: number = 0.6,
-	fadeIn: boolean = true
+	fadeIn: boolean = true,
+	repeatCount: number = 1,
+	repeatGapSec: number = 1.2
 ): Promise<void> {
 	if (typeof window === 'undefined') return;
 
@@ -95,138 +137,190 @@ export async function playSound(
 	const now = ctx.currentTime;
 	const clampedVol = Math.max(0.05, Math.min(1, volume));
 
+	// Create master gain node
 	const master = ctx.createGain();
 	currentMasterGain = master;
-	master.connect(ctx.destination);
 
-	// Fade-in envelope
+	// Warm acoustic low-pass filter to eliminate harsh digital edges
+	const lowpass = ctx.createBiquadFilter();
+	lowpass.type = 'lowpass';
+	lowpass.frequency.setValueAtTime(3200, now);
+	lowpass.Q.setValueAtTime(0.7, now);
+
+	master.connect(lowpass);
+	lowpass.connect(ctx.destination);
+
+	// Master volume envelope:
+	// Melodies have a luxurious gradual fade-in bloom, while short alerts have a smooth de-clicked onset
+	const isMelody = preset === 'calm-piano' || preset === 'morning-dew' || preset === 'still-water';
 	if (fadeIn) {
 		master.gain.setValueAtTime(0.0001, now);
-		master.gain.linearRampToValueAtTime(clampedVol, now + 0.65);
+		if (isMelody) {
+			master.gain.linearRampToValueAtTime(clampedVol, now + 0.75);
+		} else {
+			master.gain.linearRampToValueAtTime(clampedVol, now + 0.08);
+		}
 	} else {
 		master.gain.setValueAtTime(0.0001, now);
-		master.gain.linearRampToValueAtTime(clampedVol, now + 0.02);
+		master.gain.linearRampToValueAtTime(clampedVol, now + 0.015);
 	}
+
+	let presetDuration = 2.0;
 
 	switch (preset) {
 		case 'soft-bell': {
-			// Gentle exponential chime with rich bell resonance
-			const freq = 659.25; // E5
-			playTone(ctx, master, freq, now, 0.015, 2.2, 0.7, 'sine', [
-				{ mult: 2.0, gain: 0.3 },
-				{ mult: 2.76, gain: 0.15 },
-				{ mult: 4.07, gain: 0.08 }
+			// Gentle Tibetan singing bowl / meditation bell chime with non-harmonic acoustic partials
+			lowpass.frequency.setValueAtTime(2800, now);
+			const freq = 587.33; // D5
+
+			// Fundamental tone
+			playTone(ctx, master, freq, now, 0.025, 2.6, 0.65, 'sine', [
+				{ mult: 2.0, gain: 0.25, decayMult: 0.8 },
+				{ mult: 2.76, gain: 0.18, decayMult: 0.6 }, // Singing bowl modal tierce
+				{ mult: 5.4, gain: 0.08, decayMult: 0.4 } // High shimmer
 			]);
-			// Low warmth undertone
-			playTone(ctx, master, freq / 2, now, 0.02, 1.8, 0.35, 'triangle');
+
+			// Low warm undertone (D4)
+			playTone(ctx, master, freq / 2, now, 0.035, 2.2, 0.35, 'triangle');
+			presetDuration = 2.8;
 			break;
 		}
 
 		case 'gentle-chime': {
-			// Two-tone melodic harmonic chime (E5 -> B5)
+			// Two-tone silver notification chime (E5 -> B5, perfect fifth)
+			lowpass.frequency.setValueAtTime(3800, now);
 			const note1 = 659.25; // E5
 			const note2 = 987.77; // B5
 
-			playTone(ctx, master, note1, now, 0.012, 1.8, 0.6, 'sine', [
-				{ mult: 2.0, gain: 0.2 },
-				{ mult: 3.0, gain: 0.08 }
+			// Note 1
+			playTone(ctx, master, note1, now, 0.016, 2.0, 0.58, 'sine', [
+				{ mult: 2.0, gain: 0.22, decayMult: 0.75 },
+				{ mult: 3.0, gain: 0.09, decayMult: 0.5 }
 			]);
 
-			playTone(ctx, master, note2, now + 0.18, 0.012, 2.1, 0.65, 'sine', [
-				{ mult: 2.0, gain: 0.22 },
-				{ mult: 3.0, gain: 0.09 }
+			// Note 2 (+190ms)
+			playTone(ctx, master, note2, now + 0.19, 0.016, 2.3, 0.62, 'sine', [
+				{ mult: 2.0, gain: 0.24, decayMult: 0.8 },
+				{ mult: 3.0, gain: 0.1, decayMult: 0.55 },
+				{ mult: 4.0, gain: 0.04, decayMult: 0.4 }
 			]);
+
+			presetDuration = 2.5;
 			break;
 		}
 
 		case 'calm-drop': {
-			// Soft droplet marimba tone with subtle pitch glide & water drop ping
-			const osc = ctx.createOscillator();
-			const gain = ctx.createGain();
+			// Organic liquid droplet marimba tone with natural pitch glide & ripple echo
+			lowpass.frequency.setValueAtTime(2600, now);
 
-			osc.type = 'sine';
-			osc.frequency.setValueAtTime(960, now);
-			osc.frequency.exponentialRampToValueAtTime(680, now + 0.06);
+			// Primary water droplet: quick pitch bend downward
+			const osc1 = ctx.createOscillator();
+			const gain1 = ctx.createGain();
+			osc1.type = 'sine';
+			osc1.frequency.setValueAtTime(1080, now);
+			osc1.frequency.exponentialRampToValueAtTime(720, now + 0.055);
 
-			gain.gain.setValueAtTime(0.0001, now);
-			gain.gain.linearRampToValueAtTime(0.7, now + 0.01);
-			gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+			gain1.gain.setValueAtTime(0.0001, now);
+			gain1.gain.linearRampToValueAtTime(0.72, now + 0.012);
+			gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.8);
 
-			osc.connect(gain);
-			gain.connect(master);
-			osc.start(now);
-			osc.stop(now + 0.8);
+			osc1.connect(gain1);
+			gain1.connect(master);
+			osc1.start(now);
+			osc1.stop(now + 0.85);
 
-			// Resonant marimba body
-			playTone(ctx, master, 680, now + 0.02, 0.01, 0.6, 0.4, 'triangle');
+			// Wooden marimba / droplet body resonance at 720 Hz
+			playTone(ctx, master, 720, now + 0.015, 0.01, 0.65, 0.42, 'triangle');
 
-			// Delicate secondary ripple drop
+			// Secondary delicate ripple drop (+100ms)
 			const osc2 = ctx.createOscillator();
 			const gain2 = ctx.createGain();
 			osc2.type = 'sine';
-			osc2.frequency.setValueAtTime(1180, now + 0.09);
-			osc2.frequency.exponentialRampToValueAtTime(890, now + 0.14);
+			osc2.frequency.setValueAtTime(1280, now + 0.1);
+			osc2.frequency.exponentialRampToValueAtTime(940, now + 0.15);
 
-			gain2.gain.setValueAtTime(0.0001, now + 0.09);
-			gain2.gain.linearRampToValueAtTime(0.35, now + 0.1);
-			gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+			gain2.gain.setValueAtTime(0.0001, now + 0.1);
+			gain2.gain.linearRampToValueAtTime(0.38, now + 0.11);
+			gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
 
 			osc2.connect(gain2);
 			gain2.connect(master);
-			osc2.start(now + 0.09);
-			osc2.stop(now + 0.6);
+			osc2.start(now + 0.1);
+			osc2.stop(now + 0.7);
+
+			presetDuration = 1.0;
 			break;
 		}
 
 		case 'calm-piano': {
-			// Peaceful four-note piano chord phrase (Fmaj7: F4, A4, C5, E5)
+			// Felt upright piano four-note chord phrase (Fmaj7: F4, A4, C5, E5)
+			lowpass.frequency.setValueAtTime(2200, now); // Soft felt piano low-pass
 			const chord = [349.23, 440.0, 523.25, 659.25];
-			const stagger = 0.16;
+			const stagger = 0.17;
 
 			chord.forEach((freq, idx) => {
 				const noteTime = now + idx * stagger;
-				// Primary piano harmonic
-				playTone(ctx, master, freq, noteTime, 0.008, 1.9, 0.5, 'sine', [
-					{ mult: 2.0, gain: 0.25 },
-					{ mult: 3.0, gain: 0.12 },
-					{ mult: 4.0, gain: 0.05 }
+				// Primary string tone
+				playTone(ctx, master, freq, noteTime, 0.012, 2.2, 0.5, 'sine', [
+					{ mult: 2.0, gain: 0.24, decayMult: 0.75 },
+					{ mult: 3.0, gain: 0.11, decayMult: 0.55 },
+					{ mult: 4.0, gain: 0.04, decayMult: 0.4 }
 				]);
-				// Soft wooden mallet hammer
-				playTone(ctx, master, freq, noteTime, 0.005, 0.4, 0.25, 'triangle');
+				// Wooden felt hammer impact transient
+				playTone(ctx, master, freq, noteTime, 0.005, 0.22, 0.22, 'triangle');
 			});
+
+			presetDuration = 0.17 * 4 + 2.2;
 			break;
 		}
 
 		case 'morning-dew': {
-			// Ascending 5-note pentatonic melody (C5, D5, E5, G5, A5)
+			// Ascending 5-note pentatonic melody with blossoming celesta/glockenspiel overtones
+			// C5, D5, E5, G5, A5
+			lowpass.frequency.setValueAtTime(3400, now);
 			const notes = [523.25, 587.33, 659.25, 783.99, 880.0];
 			const stagger = 0.15;
 
 			notes.forEach((freq, idx) => {
 				const noteTime = now + idx * stagger;
-				playTone(ctx, master, freq, noteTime, 0.015, 1.6, 0.5, 'sine', [
-					{ mult: 2.0, gain: 0.2 },
-					{ mult: 3.0, gain: 0.08 }
+				const notePeak = 0.42 + (idx / notes.length) * 0.18; // Slight rising crescendo
+				playTone(ctx, master, freq, noteTime, 0.016, 1.8, notePeak, 'sine', [
+					{ mult: 2.0, gain: 0.22, decayMult: 0.75 },
+					{ mult: 3.0, gain: 0.08, decayMult: 0.5 }
 				]);
 			});
+
+			presetDuration = 0.15 * 5 + 1.8;
 			break;
 		}
 
 		case 'still-water': {
-			// Slower, deeper calming ambient resonance (D3, A3, D4, F#4, A4)
+			// Slower, deeper ambient resonance with rich low-register chords (D3, A3, D4, F#4, A4)
+			lowpass.frequency.setValueAtTime(1400, now); // Deep warm ambient filter
 			const notes = [146.83, 220.0, 293.66, 369.99, 440.0];
 			const stagger = 0.32;
 
 			notes.forEach((freq, idx) => {
 				const noteTime = now + idx * stagger;
-				playTone(ctx, master, freq, noteTime, 0.06, 3.2, 0.45, 'sine', [
-					{ mult: 2.0, gain: 0.25 },
-					{ mult: 3.0, gain: 0.15 }
+				playTone(ctx, master, freq, noteTime, 0.06, 3.4, 0.46, 'sine', [
+					{ mult: 2.0, gain: 0.25, decayMult: 0.8 },
+					{ mult: 3.0, gain: 0.14, decayMult: 0.6 }
 				]);
-				playTone(ctx, master, freq, noteTime, 0.08, 2.5, 0.2, 'triangle');
+				// Warm triangle body
+				playTone(ctx, master, freq, noteTime, 0.08, 2.6, 0.22, 'triangle');
 			});
+
+			presetDuration = 0.32 * 5 + 3.4;
 			break;
 		}
+	}
+
+	// Support repeat behavior if repeatCount > 1
+	if (repeatCount > 1) {
+		const nextDelayMs = (presetDuration + repeatGapSec) * 1000;
+		activePlayTimeout = setTimeout(() => {
+			playSound(preset, volume, fadeIn, repeatCount - 1, repeatGapSec);
+		}, nextDelayMs);
 	}
 }
 
@@ -235,5 +329,6 @@ export function previewSound(
 	volume: number = 0.6,
 	fadeIn: boolean = true
 ): void {
-	playSound(preset, volume, fadeIn);
+	playSound(preset, volume, fadeIn, 1);
 }
+

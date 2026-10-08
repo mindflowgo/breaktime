@@ -1,9 +1,7 @@
 .svelte-kit
+app/build
 node_modules
 .DS_Store
 .env
 tauri/target
 tauri/gen
-
-ARCHITECTURE.md
-

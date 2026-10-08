@@ -1,13 +1,17 @@
 #![allow(unexpected_cfgs)]
+// tauri_nspanel's panel_event! macro requires `-> ()` in its event signatures.
+#![allow(clippy::unused_unit)]
 
-use tauri::{Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 #[cfg(target_os = "macos")]
-use tauri_nspanel::objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
+use tauri_nspanel::objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSTrackingArea, NSTrackingAreaOptions,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
+};
 #[cfg(target_os = "macos")]
-use tauri_nspanel::WebviewWindowExt;
-#[cfg(target_os = "macos")]
-use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+use tauri_nspanel::{ManagerExt as PanelManagerExt, WebviewWindowExt};
+use tauri::Emitter;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
@@ -22,34 +26,145 @@ tauri_nspanel::tauri_panel! {
         config: {
             can_become_key_window: false,
             is_floating_panel: true,
+            hides_on_deactivate: false,
         }
+    })
+
+    panel_event!(OverlayPanelEventHandler {
+        window_did_move(notification: &tauri_nspanel::objc2_foundation::NSNotification) -> (),
+        window_did_resize(notification: &tauri_nspanel::objc2_foundation::NSNotification) -> (),
     })
 }
 
 #[cfg(target_os = "macos")]
 pub fn configure_overlay_panel(window: &WebviewWindow) -> Result<(), String> {
-    apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, None, None)
-        .map_err(|error| error.to_string())?;
     let panel = window.to_panel::<OverlayPanel>().map_err(|error| error.to_string())?;
-    panel.set_level(4);
-    panel.set_style_mask(
-        NSWindowStyleMask::HUDWindow | NSWindowStyleMask::NonactivatingPanel,
+    panel.set_level(4); // NSFloatingWindowLevel: floats above standard windows
+    let _ = panel.set_style_mask(
+        NSWindowStyleMask::Borderless | NSWindowStyleMask::Resizable | NSWindowStyleMask::NonactivatingPanel,
     );
     panel.set_collection_behavior(
         NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::CanJoinAllSpaces,
+            | NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::IgnoresCycle,
     );
     panel.set_becomes_key_only_if_needed(true);
     panel.set_floating_panel(true);
+    panel.set_hides_on_deactivate(false);
     panel.set_has_shadow(false);
     panel.set_transparent(true);
-    panel.set_corner_radius(14.0);
+    panel.set_corner_radius(16.0);
+
+    unsafe {
+        let _: () = tauri_nspanel::objc2::msg_send![panel.as_panel(), setMovableByWindowBackground: true];
+
+        let content_view: Retained<NSView> = tauri_nspanel::objc2::msg_send![panel.as_panel(), contentView];
+        let bounds: NSRect = tauri_nspanel::objc2::msg_send![&content_view, bounds];
+
+        let tracking_options = NSTrackingAreaOptions::ActiveAlways
+            | NSTrackingAreaOptions::MouseEnteredAndExited
+            | NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::InVisibleRect;
+
+        let alloc: *mut NSTrackingArea = tauri_nspanel::objc2::msg_send![
+            NSTrackingArea::class(),
+            alloc
+        ];
+        let area: *mut NSTrackingArea = tauri_nspanel::objc2::msg_send![
+            alloc,
+            initWithRect: bounds,
+            options: tracking_options,
+            owner: panel.as_panel(),
+            userInfo: tauri_nspanel::objc2::ffi::nil
+        ];
+        let tracking_area = Retained::from_raw(area).unwrap();
+
+        let resize_mask = NSAutoresizingMaskOptions::ViewWidthSizable
+            | NSAutoresizingMaskOptions::ViewHeightSizable;
+        let _: () = tauri_nspanel::objc2::msg_send![&content_view, setAutoresizingMask: resize_mask];
+        let _: () = tauri_nspanel::objc2::msg_send![&content_view, addTrackingArea: &*tracking_area];
+    }
+
+    let handler = OverlayPanelEventHandler::new();
+    let app_move = window.app_handle().clone();
+    handler.window_did_move(move |_notification| {
+        let app_handle = app_move.clone();
+        if let Some(overlay) = app_handle.get_webview_window("overlay") {
+            if let Ok(phys_pos) = overlay.outer_position() {
+                let (x, y) = (phys_pos.x as f64, phys_pos.y as f64);
+                crate::window_state::mutate_window_state(&app_handle, |state| {
+                    state.minimalist.x = Some(x);
+                    state.minimalist.y = Some(y);
+                });
+            }
+        }
+    });
+
+    let app_enter = window.app_handle().clone();
+    handler.on_mouse_entered(move |_event| {
+        if let Some(overlay_window) = app_enter.get_webview_window("overlay") {
+            let _ = overlay_window.emit("overlay-entered", ());
+        }
+    });
+
+    let app_exit = window.app_handle().clone();
+    handler.on_mouse_exited(move |_event| {
+        if let Some(overlay_window) = app_exit.get_webview_window("overlay") {
+            let _ = overlay_window.emit("overlay-exited", ());
+        }
+    });
+
+    panel.set_event_handler(Some(handler.as_ref()));
+
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn configure_overlay_panel(_window: &WebviewWindow) -> Result<(), String> {
     Ok(())
+}
+
+pub fn show_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel("overlay") {
+            panel.set_level(4);
+            panel.show();
+            return Ok(());
+        }
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        overlay.show().map_err(|e| e.to_string())?;
+        let _ = overlay.set_focus();
+    }
+    Ok(())
+}
+
+pub fn hide_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel("overlay") {
+            panel.hide();
+            return Ok(());
+        }
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        overlay.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn is_overlay_panel_visible<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel("overlay") {
+            return panel.is_visible();
+        }
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        return overlay.is_visible().unwrap_or(false);
+    }
+    false
 }
 
 pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -90,17 +205,15 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 
         let tray = tray.on_menu_event(|app, event| match event.id().as_ref() {
             "toggle-overlay" => {
-                if let Some(overlay) = app.get_webview_window("overlay") {
-                    let _ = overlay.show();
-                    let _ = overlay.set_focus();
+                if is_overlay_panel_visible(app) {
+                    let _ = hide_overlay_panel(app);
+                } else {
+                    let _ = crate::window_state::enter_overlay_mode(app.clone());
                 }
             }
             "open-settings" => {
                 let _ = app.emit("open-settings", ());
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.show();
-                    let _ = main.set_focus();
-                }
+                let _ = crate::window_state::exit_overlay_mode(app.clone());
             }
             "eye-now" => {
                 let _ = app.emit("trigger-break", "eye");
@@ -123,27 +236,15 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 pub fn setup_event_listeners(app: &tauri::App) {
-    use tauri::{Emitter, Listener};
+    use tauri::Listener;
 
     let app_handle = app.handle().clone();
     app.listen("open-settings", move |_| {
-        if let Some(main) = app_handle.get_webview_window("main") {
-            let _ = main.show();
-            let _ = main.set_focus();
-        }
+        let _ = crate::window_state::exit_overlay_mode(app_handle.clone());
     });
 
     let app_handle = app.handle().clone();
-    app.listen("trigger-break", move |event| {
-        if let Some(overlay) = app_handle.get_webview_window("overlay") {
-            let _ = overlay.show();
-            let _ = overlay.set_focus();
-        }
-        let _ = app_handle.emit("break-triggered", event.payload());
-    });
-
-    let app_handle = app.handle().clone();
-    app.listen("toggle-timers", move |_| {
-        let _ = app_handle.emit("timers-toggled", ());
+    app.listen("trigger-break", move |_| {
+        let _ = crate::window_state::enter_overlay_mode(app_handle.clone());
     });
 }

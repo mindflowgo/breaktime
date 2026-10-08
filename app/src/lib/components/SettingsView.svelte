@@ -10,26 +10,53 @@
 		BarChart3,
 		CheckCircle2,
 		XCircle,
-		VolumeX,
 		Play,
 		RotateCcw,
 		Sparkles,
-		Flame
+		Minus,
+		Plus,
+		AlertTriangle,
+		AlarmClockOff
 	} from 'lucide-svelte';
-	import { enterOverlayMode } from '$lib/services/windowManager';
+	import { enterOverlayMode, listenTauriEvent } from '$lib/services/windowManager';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import { timerManager } from '$lib/services/timerManager.svelte';
 	import { previewSound, stopSound } from '$lib/services/soundPlayer';
 	import { SOUND_PRESETS, type SoundPreset } from '$lib/types';
+	import SettingSlider from '$lib/components/SettingSlider.svelte';
 
 	type TabId = 'reminders' | 'sounds' | 'inactivity' | 'stats';
 	let currentTab = $state<TabId>('reminders');
 	let isPlayingPreview = $state(false);
 
 	onMount(() => {
+		const savedTab = typeof localStorage !== 'undefined' ? localStorage.getItem('breaktime_active_tab') : null;
+		if (savedTab && ['reminders', 'sounds', 'inactivity', 'stats'].includes(savedTab)) {
+			currentTab = savedTab as TabId;
+		}
+
 		settingsStore.init();
 		timerManager.init();
+
+		const unlistenPromise = listenTauriEvent<TabId>('breaktime:open-tab', (tab) => {
+			if (tab && ['reminders', 'sounds', 'inactivity', 'stats'].includes(tab)) {
+				currentTab = tab;
+			}
+		});
+
+		return () => {
+			unlistenPromise.then((unlisten) => unlisten());
+			timerManager.destroy();
+			settingsStore.destroy();
+		};
 	});
+
+	function switchTab(tab: TabId) {
+		currentTab = tab;
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem('breaktime_active_tab', tab);
+		}
+	}
 
 	function handlePreview(preset?: SoundPreset) {
 		const targetPreset = preset || settingsStore.settings.soundPreset;
@@ -49,9 +76,11 @@
 		await enterOverlayMode();
 	}
 
-	// Adherence calculations
+	// Adherence calculations — expired (ignored) prompts count as non-adherent attempts
 	let totalAttempts = $derived(
-		settingsStore.stats.totalCompleted + settingsStore.stats.totalSkipped
+		settingsStore.stats.totalCompleted +
+			settingsStore.stats.totalSkipped +
+			settingsStore.stats.totalExpired
 	);
 
 	let overallAdherence = $derived.by(() => {
@@ -60,7 +89,7 @@
 	});
 
 	let eyeTotal = $derived(
-		settingsStore.stats.eyeCompleted + settingsStore.stats.eyeSkipped
+		settingsStore.stats.eyeCompleted + settingsStore.stats.eyeSkipped + settingsStore.stats.eyeExpired
 	);
 
 	let eyeAdherence = $derived.by(() => {
@@ -69,8 +98,17 @@
 	});
 
 	let stretchTotal = $derived(
-		settingsStore.stats.stretchCompleted + settingsStore.stats.stretchSkipped
+		settingsStore.stats.stretchCompleted +
+			settingsStore.stats.stretchSkipped +
+			settingsStore.stats.stretchExpired
 	);
+
+	function adjustSoundRepeat(delta: number) {
+		const next = Math.max(1, Math.min(5, (settingsStore.settings.soundRepeat || 1) + delta));
+		if (next !== settingsStore.settings.soundRepeat) {
+			settingsStore.updateSettings({ soundRepeat: next });
+		}
+	}
 
 	let stretchAdherence = $derived.by(() => {
 		if (stretchTotal <= 0) return 100;
@@ -119,19 +157,26 @@
 		</button>
 	</header>
 
+	{#if settingsStore.lastError}
+		<!-- Persistence failure banner -->
+		<div
+			class="flex items-center gap-2 px-4 py-1.5 text-xs text-amber-200 bg-amber-500/10 border-b border-amber-500/20"
+		>
+			<AlertTriangle class="w-3.5 h-3.5 flex-shrink-0" />
+			<span>{settingsStore.lastError}</span>
+		</div>
+	{/if}
+
 	<!-- Segmented Tab Bar -->
 	<div class="px-5 pt-3.5 pb-2 flex-shrink-0 bg-zinc-950">
 		<div class="flex items-center bg-zinc-900 border border-white/10 p-0.5 rounded-xl max-w-lg">
 			<button
 				type="button"
-				onclick={() => (currentTab = 'reminders')}
-				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-				class:bg-white-15={currentTab === 'reminders'}
-				class:text-white={currentTab === 'reminders'}
-				class:shadow-sm={currentTab === 'reminders'}
-				class:text-zinc-400={currentTab !== 'reminders'}
-				class:hover:text-zinc-200={currentTab !== 'reminders'}
-				style={currentTab === 'reminders' ? 'background: rgba(255, 255, 255, 0.12);' : ''}
+				onclick={() => switchTab('reminders')}
+				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer {currentTab ===
+				'reminders'
+					? 'bg-white/10 text-white shadow-sm'
+					: 'text-zinc-400 hover:text-zinc-200'}"
 			>
 				<Clock class="w-3.5 h-3.5" />
 				<span>Reminders</span>
@@ -139,14 +184,11 @@
 
 			<button
 				type="button"
-				onclick={() => (currentTab = 'sounds')}
-				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-				class:bg-white-15={currentTab === 'sounds'}
-				class:text-white={currentTab === 'sounds'}
-				class:shadow-sm={currentTab === 'sounds'}
-				class:text-zinc-400={currentTab !== 'sounds'}
-				class:hover:text-zinc-200={currentTab !== 'sounds'}
-				style={currentTab === 'sounds' ? 'background: rgba(255, 255, 255, 0.12);' : ''}
+				onclick={() => switchTab('sounds')}
+				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer {currentTab ===
+				'sounds'
+					? 'bg-white/10 text-white shadow-sm'
+					: 'text-zinc-400 hover:text-zinc-200'}"
 			>
 				<Volume2 class="w-3.5 h-3.5" />
 				<span>Sounds</span>
@@ -154,14 +196,11 @@
 
 			<button
 				type="button"
-				onclick={() => (currentTab = 'inactivity')}
-				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-				class:bg-white-15={currentTab === 'inactivity'}
-				class:text-white={currentTab === 'inactivity'}
-				class:shadow-sm={currentTab === 'inactivity'}
-				class:text-zinc-400={currentTab !== 'inactivity'}
-				class:hover:text-zinc-200={currentTab !== 'inactivity'}
-				style={currentTab === 'inactivity' ? 'background: rgba(255, 255, 255, 0.12);' : ''}
+				onclick={() => switchTab('inactivity')}
+				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer {currentTab ===
+				'inactivity'
+					? 'bg-white/10 text-white shadow-sm'
+					: 'text-zinc-400 hover:text-zinc-200'}"
 			>
 				<Moon class="w-3.5 h-3.5" />
 				<span>Inactivity</span>
@@ -169,14 +208,11 @@
 
 			<button
 				type="button"
-				onclick={() => (currentTab = 'stats')}
-				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-				class:bg-white-15={currentTab === 'stats'}
-				class:text-white={currentTab === 'stats'}
-				class:shadow-sm={currentTab === 'stats'}
-				class:text-zinc-400={currentTab !== 'stats'}
-				class:hover:text-zinc-200={currentTab !== 'stats'}
-				style={currentTab === 'stats' ? 'background: rgba(255, 255, 255, 0.12);' : ''}
+				onclick={() => switchTab('stats')}
+				class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer {currentTab ===
+				'stats'
+					? 'bg-white/10 text-white shadow-sm'
+					: 'text-zinc-400 hover:text-zinc-200'}"
 			>
 				<BarChart3 class="w-3.5 h-3.5" />
 				<span>Stats & History</span>
@@ -189,6 +225,25 @@
 		{#if currentTab === 'reminders'}
 			<!-- REMINDERS TAB -->
 			<div class="space-y-4 max-w-2xl">
+				<!-- Header Row with Reset Cycles -->
+				<div class="flex items-center justify-between pb-0.5">
+					<div>
+						<h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+							Reminder Schedules
+						</h2>
+						<p class="text-[11px] text-zinc-500">Custom intervals and guided break durations</p>
+					</div>
+					<button
+						type="button"
+						onclick={() => timerManager.resetTimers()}
+						class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors cursor-pointer"
+						title="Restart countdowns from their full intervals"
+					>
+						<RotateCcw class="w-3.5 h-3.5 text-zinc-400" />
+						<span>Reset Cycles</span>
+					</button>
+				</div>
+
 				<!-- Eye Reset Card -->
 				<section class="rounded-xl border border-white/10 bg-zinc-900/40 p-4">
 					<div class="flex items-center justify-between pb-3 border-b border-white/5">
@@ -223,54 +278,30 @@
 
 					<div class="pt-3.5 space-y-3.5">
 						<!-- Interval row -->
-						<div class="flex items-center justify-between gap-4">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Interval</span>
-								<p class="text-[11px] text-zinc-500">How often to trigger reminder</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="5"
-									max="60"
-									step="5"
-									value={settingsStore.settings.eyeIntervalMin}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											eyeIntervalMin: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-emerald-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-emerald-300">
-									{settingsStore.settings.eyeIntervalMin} min
-								</span>
-							</div>
-						</div>
+						<SettingSlider
+							label="Interval"
+							desc="How often to trigger reminder"
+							min={5}
+							max={60}
+							step={5}
+							value={settingsStore.settings.eyeIntervalMin}
+							accent="emerald"
+							format={(v) => `${v} min`}
+							onCommit={(v) => settingsStore.updateSettings({ eyeIntervalMin: v })}
+						/>
 
 						<!-- Duration row -->
-						<div class="flex items-center justify-between gap-4">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Duration</span>
-								<p class="text-[11px] text-zinc-500">Length of the guided break</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="10"
-									max="60"
-									step="5"
-									value={settingsStore.settings.eyeDurationSec}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											eyeDurationSec: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-emerald-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-emerald-300">
-									{settingsStore.settings.eyeDurationSec} sec
-								</span>
-							</div>
-						</div>
+						<SettingSlider
+							label="Duration"
+							desc="Length of the guided break"
+							min={10}
+							max={60}
+							step={5}
+							value={settingsStore.settings.eyeDurationSec}
+							accent="emerald"
+							format={(v) => `${v} sec`}
+							onCommit={(v) => settingsStore.updateSettings({ eyeDurationSec: v })}
+						/>
 
 						<p class="text-[11px] text-zinc-500 italic pt-1 border-t border-white/5">
 							* Includes guided animation with 10 counted blinks to relieve eye fatigue.
@@ -312,54 +343,30 @@
 
 					<div class="pt-3.5 space-y-3.5">
 						<!-- Interval row -->
-						<div class="flex items-center justify-between gap-4">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Interval</span>
-								<p class="text-[11px] text-zinc-500">How often to trigger reminder</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="15"
-									max="120"
-									step="5"
-									value={settingsStore.settings.stretchIntervalMin}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											stretchIntervalMin: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-amber-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-amber-300">
-									{settingsStore.settings.stretchIntervalMin} min
-								</span>
-							</div>
-						</div>
+						<SettingSlider
+							label="Interval"
+							desc="How often to trigger reminder"
+							min={15}
+							max={120}
+							step={5}
+							value={settingsStore.settings.stretchIntervalMin}
+							accent="amber"
+							format={(v) => `${v} min`}
+							onCommit={(v) => settingsStore.updateSettings({ stretchIntervalMin: v })}
+						/>
 
 						<!-- Duration row -->
-						<div class="flex items-center justify-between gap-4">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Duration</span>
-								<p class="text-[11px] text-zinc-500">Length of the movement break</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="30"
-									max="180"
-									step="15"
-									value={settingsStore.settings.stretchDurationSec}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											stretchDurationSec: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-amber-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-amber-300">
-									{settingsStore.settings.stretchDurationSec} sec
-								</span>
-							</div>
-						</div>
+						<SettingSlider
+							label="Duration"
+							desc="Length of the movement break"
+							min={30}
+							max={180}
+							step={15}
+							value={settingsStore.settings.stretchDurationSec}
+							accent="amber"
+							format={(v) => `${v} sec`}
+							onCommit={(v) => settingsStore.updateSettings({ stretchDurationSec: v })}
+						/>
 
 						<p class="text-[11px] text-zinc-500 italic pt-1 border-t border-white/5">
 							* Rotates guided exercises: Stand & walk • Stretch arms • Roll shoulders • Gentle squats.
@@ -401,15 +408,9 @@
 										settingsStore.updateSettings({ soundPreset: preset.id });
 									}
 								}}
-								class="flex flex-col text-left p-2.5 rounded-lg border transition-all cursor-pointer relative"
-								class:border-emerald-500-50={isSelected}
-								class:bg-emerald-500-10={isSelected}
-								class:border-white-10={!isSelected}
-								class:bg-zinc-900-50={!isSelected}
-								class:hover:border-white-20={!isSelected}
-								style={isSelected
-									? 'border-color: rgba(16, 185, 129, 0.5); background: rgba(16, 185, 129, 0.08);'
-									: 'border-color: rgba(255, 255, 255, 0.08); background: rgba(24, 24, 27, 0.5);'}
+								class="flex flex-col text-left p-2.5 rounded-lg border transition-all cursor-pointer relative {isSelected
+									? 'border-emerald-500/50 bg-emerald-500/10'
+									: 'border-white/10 bg-zinc-900/50 hover:border-white/20'}"
 							>
 								<div class="flex items-center justify-between w-full">
 									<span class="text-xs font-semibold" class:text-emerald-300={isSelected}>
@@ -436,30 +437,51 @@
 					</div>
 				</section>
 
-				<!-- Volume & Fade Controls -->
+				<!-- Volume, Repeat & Fade Controls -->
 				<section class="rounded-xl border border-white/10 bg-zinc-900/40 p-4 space-y-3.5">
 					<!-- Volume slider -->
+					<SettingSlider
+						label="Volume"
+						desc="Synthesizer master gain level"
+						min={0.1}
+						max={1.0}
+						step={0.05}
+						value={settingsStore.settings.soundVolume}
+						accent="emerald"
+						format={(v) => `${Math.round(v * 100)}%`}
+						onCommit={(v) => settingsStore.updateSettings({ soundVolume: v })}
+					/>
+
+					<!-- Repeat stepper -->
 					<div class="flex items-center justify-between gap-4">
 						<div>
-							<span class="text-xs font-medium text-zinc-200">Volume</span>
-							<p class="text-[11px] text-zinc-500">Synthesizer master gain level</p>
+							<span class="text-xs font-medium text-zinc-200">Repeat</span>
+							<p class="text-[11px] text-zinc-500">
+								How many times the phrase plays per reminder (1–5)
+							</p>
 						</div>
-						<div class="flex items-center gap-3 w-56">
-							<input
-								type="range"
-								min="0.1"
-								max="1.0"
-								step="0.05"
-								value={settingsStore.settings.soundVolume}
-								oninput={(e) =>
-									settingsStore.updateSettings({
-										soundVolume: Number((e.target as HTMLInputElement).value)
-									})}
-								class="flex-1 accent-emerald-400 cursor-pointer"
-							/>
-							<span class="w-12 text-right text-xs font-mono font-medium text-emerald-300">
-								{Math.round(settingsStore.settings.soundVolume * 100)}%
+						<div class="flex items-center gap-2">
+							<button
+								type="button"
+								onclick={() => adjustSoundRepeat(-1)}
+								disabled={(settingsStore.settings.soundRepeat || 1) <= 1}
+								class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+								title="Fewer repetitions"
+							>
+								<Minus class="w-3.5 h-3.5" />
+							</button>
+							<span class="w-16 text-center text-xs font-mono font-medium text-emerald-300">
+								{settingsStore.settings.soundRepeat || 1}×
 							</span>
+							<button
+								type="button"
+								onclick={() => adjustSoundRepeat(1)}
+								disabled={(settingsStore.settings.soundRepeat || 1) >= 5}
+								class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+								title="More repetitions"
+							>
+								<Plus class="w-3.5 h-3.5" />
+							</button>
 						</div>
 					</div>
 
@@ -532,57 +554,31 @@
 
 					<div class="pt-3.5 space-y-4">
 						<!-- Idle Threshold -->
-						<div class="flex items-center justify-between gap-4">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Idle Threshold</span>
-								<p class="text-[11px] text-zinc-500">
-									Inactivity duration before entering away state
-								</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="60"
-									max="900"
-									step="60"
-									value={settingsStore.settings.idleThresholdSec}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											idleThresholdSec: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-indigo-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-indigo-300">
-									{Math.round(settingsStore.settings.idleThresholdSec / 60)} min
-								</span>
-							</div>
-						</div>
+						<SettingSlider
+							label="Idle Threshold"
+							desc="Inactivity duration before entering away state"
+							min={60}
+							max={900}
+							step={60}
+							value={settingsStore.settings.idleThresholdSec}
+							accent="indigo"
+							format={(v) => `${Math.round(v / 60)} min`}
+							onCommit={(v) => settingsStore.updateSettings({ idleThresholdSec: v })}
+						/>
 
 						<!-- Away Reset Threshold -->
-						<div class="flex items-center justify-between gap-4 pt-2 border-t border-white/5">
-							<div class="min-w-0">
-								<span class="text-xs font-medium text-zinc-200">Away Reset Threshold</span>
-								<p class="text-[11px] text-zinc-500">
-									If away for this duration or longer, reset timers on return
-								</p>
-							</div>
-							<div class="flex items-center gap-3 w-56">
-								<input
-									type="range"
-									min="5"
-									max="30"
-									step="1"
-									value={settingsStore.settings.awayResetMin}
-									oninput={(e) =>
-										settingsStore.updateSettings({
-											awayResetMin: Number((e.target as HTMLInputElement).value)
-										})}
-									class="flex-1 accent-indigo-400 cursor-pointer"
-								/>
-								<span class="w-14 text-right text-xs font-mono font-medium text-indigo-300">
-									{settingsStore.settings.awayResetMin} min
-								</span>
-							</div>
+						<div class="pt-2 border-t border-white/5">
+							<SettingSlider
+								label="Away Reset Threshold"
+								desc="If away for this duration or longer, reset timers on return"
+								min={5}
+								max={30}
+								step={1}
+								value={settingsStore.settings.awayResetMin}
+								accent="indigo"
+								format={(v) => `${v} min`}
+								onCommit={(v) => settingsStore.updateSettings({ awayResetMin: v })}
+							/>
 						</div>
 
 						<div class="text-[11px] text-zinc-500 bg-zinc-950/60 p-2.5 rounded-lg border border-white/5">
@@ -596,7 +592,7 @@
 			<!-- STATS & HISTORY TAB -->
 			<div class="space-y-4 max-w-2xl">
 				<!-- Overview Cards -->
-				<div class="grid grid-cols-3 gap-3">
+				<div class="grid grid-cols-4 gap-3">
 					<div class="rounded-xl border border-white/10 bg-zinc-900/40 p-3 flex flex-col">
 						<span class="text-[11px] font-medium text-zinc-400">Total Completed</span>
 						<span class="text-xl font-bold font-mono text-emerald-400 mt-1">
@@ -611,6 +607,14 @@
 							{settingsStore.stats.totalSkipped}
 						</span>
 						<span class="text-[10px] text-zinc-500 mt-0.5">Dismissed breaks</span>
+					</div>
+
+					<div class="rounded-xl border border-white/10 bg-zinc-900/40 p-3 flex flex-col">
+						<span class="text-[11px] font-medium text-zinc-400">Expired</span>
+						<span class="text-xl font-bold font-mono text-indigo-400 mt-1">
+							{settingsStore.stats.totalExpired}
+						</span>
+						<span class="text-[10px] text-zinc-500 mt-0.5">Ignored prompts</span>
 					</div>
 
 					<div class="rounded-xl border border-white/10 bg-zinc-900/40 p-3 flex flex-col">
@@ -653,6 +657,7 @@
 							<div class="flex justify-between text-[11px] text-zinc-500">
 								<span>Completed: {settingsStore.stats.eyeCompleted}</span>
 								<span>Skipped: {settingsStore.stats.eyeSkipped}</span>
+								<span>Expired: {settingsStore.stats.eyeExpired}</span>
 							</div>
 						</div>
 
@@ -675,6 +680,7 @@
 							<div class="flex justify-between text-[11px] text-zinc-500">
 								<span>Completed: {settingsStore.stats.stretchCompleted}</span>
 								<span>Skipped: {settingsStore.stats.stretchSkipped}</span>
+								<span>Expired: {settingsStore.stats.stretchExpired}</span>
 							</div>
 						</div>
 					</div>
@@ -694,9 +700,11 @@
 										settingsStore.resetStats();
 									}
 								}}
-								class="text-[11px] text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
+								class="flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+								title="Clear all cumulative stats and history logs"
 							>
-								Reset Stats
+								<RotateCcw class="w-3 h-3" />
+								<span>Reset Stats</span>
 							</button>
 						{/if}
 					</div>
@@ -726,16 +734,20 @@
 										</span>
 									</div>
 
-									<div class="flex items-center gap-3">
-										{#if item.action === 'completed'}
-											<span class="flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
-												<CheckCircle2 class="w-3 h-3" /> Completed
-											</span>
-										{:else}
-											<span class="flex items-center gap-1 text-[11px] text-zinc-400 font-medium">
-												<XCircle class="w-3 h-3" /> Skipped
-											</span>
-										{/if}
+										<div class="flex items-center gap-3">
+											{#if item.action === 'completed'}
+												<span class="flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+													<CheckCircle2 class="w-3 h-3" /> Completed
+												</span>
+											{:else if item.action === 'skipped'}
+												<span class="flex items-center gap-1 text-[11px] text-zinc-400 font-medium">
+													<XCircle class="w-3 h-3" /> Skipped
+												</span>
+											{:else}
+												<span class="flex items-center gap-1 text-[11px] text-indigo-400 font-medium">
+													<AlarmClockOff class="w-3 h-3" /> Expired
+												</span>
+											{/if}
 										<span class="text-[11px] font-mono text-zinc-500">
 											{formatTimeAgo(item.timestamp)}
 										</span>
