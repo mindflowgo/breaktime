@@ -1,0 +1,1 @@
+import{a as t,f as a}from"../chunks/v8dKUasl.js";import{B as s,C as i}from"../chunks/BdJM11Nc.js";import{s as p}from"../chunks/Ct57BbUh.js";var c=a('<div class="h-screen w-screen overflow-hidden bg-transparent select-none text-zinc-100"><!></div>');function l(r,o){var e=c(),n=s(e);p(n,()=>o.children),i(e),t(r,e)}export{l as component};
