@@ -26,10 +26,23 @@ pub fn get_setting_value(app: &AppHandle, key: &str) -> Option<Value> {
     raw.get(key).cloned()
 }
 
-/// Atomic write: a crash mid-write must never truncate the settings file,
-/// so write to a sibling temp file and rename over the target.
+/// Atomic write: a crash mid-write must never truncate the target file, so
+/// write to a sibling temp file and rename over the target. The temp name is
+/// unique per call (pid + counter) so concurrent writers on different threads
+/// cannot interleave on a shared tmp path.
 pub fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
-    let tmp = path.with_extension("json.tmp");
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "state".to_string());
+    let tmp = path.with_file_name(format!(
+        ".{}.{}.{}.tmp",
+        file_name,
+        std::process::id(),
+        seq
+    ));
     std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
     Ok(())
@@ -72,40 +85,37 @@ pub fn set_setting(app: tauri::AppHandle, key: String, value: serde_json::Value)
 
 #[cfg(test)]
 mod tests {
+    use super::atomic_write;
+
     #[test]
-    fn test_settings_json_roundtrip() {
-        let mut raw = serde_json::json!({
-            "settings": {
-                "eyeEnabled": true,
-                "eyeIntervalMin": 20,
-                "eyeDurationSec": 20,
-                "stretchEnabled": true,
-                "stretchIntervalMin": 45,
-                "stretchDurationSec": 60,
-                "soundPreset": "gentle-chime",
-                "soundVolume": 0.6,
-                "soundFadeIn": true,
-                "idleThresholdSec": 300,
-                "awayResetMin": 10
-            },
-            "stats": {
-                "totalCompleted": 5,
-                "totalSkipped": 1,
-                "eyeCompleted": 3,
-                "eyeSkipped": 1,
-                "stretchCompleted": 2,
-                "stretchSkipped": 0,
-                "events": []
-            }
-        });
+    fn atomic_write_replaces_content_and_leaves_no_tmp() {
+        let dir = std::env::temp_dir().join(format!("breaktime-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
 
-        assert_eq!(raw["settings"]["eyeIntervalMin"], 20);
-        assert_eq!(raw["stats"]["totalCompleted"], 5);
+        atomic_write(&path, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":1}");
 
-        if let Some(obj) = raw.as_object_mut() {
-            obj.insert("custom_key".to_string(), serde_json::json!("test_val"));
-        }
-        assert_eq!(raw["custom_key"], "test_val");
+        atomic_write(&path, "{\"a\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":2}");
+
+        // No temp files left behind
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover tmp files: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_creates_missing_parent_dirs_target_only() {
+        // atomic_write itself does not create parents (callers do); verify the
+        // error is surfaced instead of panicking.
+        let path = std::path::PathBuf::from("/nonexistent-breaktime-dir/x.json");
+        assert!(atomic_write(&path, "{}").is_err());
     }
 }
 

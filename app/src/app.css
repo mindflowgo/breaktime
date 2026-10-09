@@ -30,12 +30,6 @@ body {
 	-webkit-user-select: none;
 }
 
-/* Allow text selection inside stats tables / debug info */
-.selectable-text {
-	user-select: text;
-	-webkit-user-select: text;
-}
-
 /* Drag regions matching llm_gauge */
 body, .overlay-container, .overlay-root, [data-tauri-drag-region] {
 	-webkit-app-region: drag;

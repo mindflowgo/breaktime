@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+  <!-- Menu-bar template icon: macOS tints the alpha mask black (light mode)
+       or white (dark mode) when icon_as_template is set. -->
+  <g transform="translate(1, 9) scale(0.42)">
+    <path
+      fill="#000000"
+      fill-rule="evenodd"
+      d="M 3 31 C 24 -5, 76 -5, 97 31 C 76 67, 24 67, 3 31 Z
+         M 3 31 C 26 10, 74 10, 97 31 C 74 52, 26 52, 3 31 Z
+         M 63.5 31 A 13.5 13.5 0 1 0 36.5 31 A 13.5 13.5 0 1 0 63.5 31 Z
+         M 58.9 25.5 A 3.4 3.4 0 1 0 52.1 25.5 A 3.4 3.4 0 1 0 58.9 25.5 Z"
+    />
+  </g>
+</svg>

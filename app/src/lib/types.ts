@@ -52,11 +52,6 @@ export const SOUND_PRESETS: SoundPresetInfo[] = [
 	}
 ];
 
-export interface HudSize {
-	width: number;
-	height: number;
-}
-
 /**
  * Default compact HUD dimensions. Must stay in sync with IDLE_HUD_WIDTH /
  * IDLE_HUD_HEIGHT in tauri/src/window_state.rs (Rust applies them at startup
@@ -78,7 +73,8 @@ export interface Settings {
 	soundRepeat: number; // 1 to 5 phrase repetitions
 	idleThresholdSec: number; // default 300 (5 min)
 	awayResetMin: number; // default 10 min
-	hudSize?: HudSize; // custom compact HUD size (from resize grip)
+	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)
+	hud2x: boolean; // 2× HUD mode (double-size eye & window)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -93,13 +89,15 @@ export const DEFAULT_SETTINGS: Settings = {
 	soundFadeIn: true,
 	soundRepeat: 1,
 	idleThresholdSec: 300,
-	awayResetMin: 10
+	awayResetMin: 10,
+	overlayOpacity: 0.85,
+	hud2x: false
 };
 
-export type BreakType = 'eye' | 'stretch';
+export type BreakType = 'eye' | 'stretch' | 'away';
 
 /**
- * 'completed': user clicked the checkmark.
+ * 'completed': user clicked the checkmark (breaks) or returned from away.
  * 'skipped': user clicked the X.
  * 'expired': countdown reached zero without user action.
  */
@@ -123,6 +121,8 @@ export interface BreakStats {
 	stretchCompleted: number;
 	stretchSkipped: number;
 	stretchExpired: number;
+	awayCount?: number;
+	totalAwaySec?: number;
 	events: BreakEvent[];
 }
 
@@ -136,12 +136,20 @@ export const DEFAULT_STATS: BreakStats = {
 	stretchCompleted: 0,
 	stretchSkipped: 0,
 	stretchExpired: 0,
+	awayCount: 0,
+	totalAwaySec: 0,
 	events: []
 };
 
 /** Command sent from a non-master window to the master (overlay) window. */
 export interface TimerCommand {
-	action: 'trigger-break' | 'toggle-pause' | 'complete-break' | 'skip-break' | 'reset-timers';
+	action:
+		| 'trigger-break'
+		| 'toggle-pause'
+		| 'complete-break'
+		| 'skip-break'
+		| 'reset-timers'
+		| 'reset-timer';
 	type?: BreakType;
 }
 
@@ -153,12 +161,11 @@ export interface TimerStateSync {
 	eyeTimeRemaining: number;
 	stretchTimeRemaining: number;
 	breakTimeRemaining: number;
-	blinkCount: number;
-	currentExerciseIndex: number;
 	awayStartTime: number | null;
 	eyeTargetTimestamp: number | null;
 	stretchTargetTimestamp: number | null;
 	breakTargetTimestamp: number | null;
+	/** Send time; mirrors drop payloads older than the last one seen. */
 	timestamp: number;
 }
 

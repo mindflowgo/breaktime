@@ -252,7 +252,7 @@ Then call `set_position(tauri::Position::Physical(...))` and update the `Moved`/
 
 **Verification:** resize HUD, quit, relaunch — size persists.
 
-### 9. Tray "Show Overlay" bypasses window-mode state
+### 9. Tray "Toggle Visible" bypasses window-mode state
 
 **Location:** `tauri/src/native.rs` tray handler `"toggle-overlay"` (lines ~92–97).
 
@@ -376,6 +376,10 @@ Verified by grep — the frontend never references these:
 
 - **App icons** are the unmodified Tauri defaults (`tauri/icons/*`). Replace with a Breaktime icon eventually; low priority.
 - **Trigger-over-active-break edge case:** tray "Take Eye Break Now" while a stretch break is active calls `triggerBreak('eye')`, which overwrites `activeBreak` without recording the interrupted stretch or resetting its interval (the stretch timer is left at 0 → it will re-fire immediately after the eye break finishes). Fix alongside item 1: in `triggerBreak`, if another break is active, finish it first via `expireBreak()` (item 6) or queue the new one.
+- **Dock & Taskbar Unobtrusiveness (Accessory mode / skipTaskbar):**
+  - **macOS Dock:** Configured `app.set_activation_policy(tauri::ActivationPolicy::Accessory)` in `tauri/src/lib.rs` (matching `llm_gauge`), ensuring Breaktime operates strictly as a background menu bar helper without appearing in the macOS Dock or App Switcher (`Cmd+Tab`).
+  - **Windows / Linux Taskbar:** Verified `skipTaskbar: true` is configured on the floating overlay in `tauri/tauri.conf.json`. For the `main` window (settings & stats), verify whether `skipTaskbar: true` should also be set if settings is meant to remain taskbar-free, or keep taskbar presence only when the settings window is actively opened.
+
 
 ---
 

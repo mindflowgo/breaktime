@@ -4,72 +4,25 @@
       <stop offset="0%" stop-color="#27272a" />
       <stop offset="100%" stop-color="#18181b" />
     </linearGradient>
-    <linearGradient id="eyelidGreyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#94a3b8" />
-      <stop offset="50%" stop-color="#cbd5e1" />
-      <stop offset="100%" stop-color="#94a3b8" />
-    </linearGradient>
     <filter id="iconShadow" x="-10%" y="-10%" width="120%" height="125%">
       <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000000" flood-opacity="0.45" />
-    </filter>
-    <filter id="eyeShadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.4" />
     </filter>
   </defs>
 
   <!-- App Squircle Background -->
   <rect x="48" y="48" width="928" height="928" rx="208" ry="208" fill="url(#iconBgGrad)" stroke="#3f3f46" stroke-width="4" filter="url(#iconShadow)" />
 
-  <!-- Eye Graphic (Grey Monochrome Design) scaled and centered inside squircle -->
-  <!-- Center is (512, 512). Scaled ~8.8x from 100x66 viewBox -->
-  <g transform="translate(68, 220) scale(8.88)">
-    <!-- White Sclera Eyeball -->
+  <!-- Compact eye (from the hand-drawn original), inverted to light-on-dark:
+       tapered almond band, pupil, catchlight glint inside the pupil.
+       Single path, evenodd: outer almond, inner almond, pupil, glint. -->
+  <g transform="translate(182, 307) scale(6.6)">
     <path
-      d="M 6 34 C 24 6, 76 6, 94 34 C 76 60, 24 60, 6 34 Z"
       fill="#f8fafc"
-      filter="url(#eyeShadow)"
-    />
-
-    <!-- Slate Grey Iris -->
-    <circle
-      cx="50"
-      cy="34"
-      r="21"
-      fill="#64748b"
-    />
-
-    <!-- Dark Charcoal Pupil -->
-    <circle
-      cx="50"
-      cy="31.5"
-      r="9.5"
-      fill="#1e293b"
-    />
-
-    <!-- White Specular Highlight -->
-    <circle
-      cx="56.5"
-      cy="24.5"
-      r="3.2"
-      fill="#ffffff"
-    />
-
-    <!-- Upper Eyelid Arc (silver-grey) -->
-    <path
-      d="M 6 34 C 24 6, 76 6, 94 34"
-      stroke="url(#eyelidGreyGrad)"
-      stroke-width="6.5"
-      stroke-linecap="round"
-      fill="none"
-    />
-
-    <!-- Lower Eyelid Arc (medium grey) -->
-    <path
-      d="M 94 34 C 76 60, 24 60, 6 34"
-      stroke="#94a3b8"
-      stroke-width="4"
-      stroke-linecap="round"
-      fill="none"
+      fill-rule="evenodd"
+      d="M 3 31 C 24 -5, 76 -5, 97 31 C 76 67, 24 67, 3 31 Z
+         M 3 31 C 26 10, 74 10, 97 31 C 74 52, 26 52, 3 31 Z
+         M 63.5 31 A 13.5 13.5 0 1 0 36.5 31 A 13.5 13.5 0 1 0 63.5 31 Z
+         M 58.9 25.5 A 3.4 3.4 0 1 0 52.1 25.5 A 3.4 3.4 0 1 0 58.9 25.5 Z"
     />
   </g>
 </svg>

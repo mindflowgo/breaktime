@@ -11,7 +11,6 @@ use tauri_nspanel::objc2_app_kit::{
 };
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{ManagerExt as PanelManagerExt, WebviewWindowExt};
-use tauri::Emitter;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
@@ -38,6 +37,8 @@ tauri_nspanel::tauri_panel! {
 
 #[cfg(target_os = "macos")]
 pub fn configure_overlay_panel(window: &WebviewWindow) -> Result<(), String> {
+    use tauri::Emitter;
+
     let panel = window.to_panel::<OverlayPanel>().map_err(|error| error.to_string())?;
     panel.set_level(4); // NSFloatingWindowLevel: floats above standard windows
     let _ = panel.set_style_mask(
@@ -172,13 +173,15 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     {
         use tauri::Emitter;
 
-        let toggle_overlay = MenuItemBuilder::with_id("toggle-overlay", "Show Overlay").build(app)?;
+        let toggle_overlay = MenuItemBuilder::with_id("toggle-overlay", "Toggle Visible").build(app)?;
         let open_settings = MenuItemBuilder::with_id("open-settings", "Settings & Stats").build(app)?;
         let sep1 = PredefinedMenuItem::separator(app)?;
         let eye_now = MenuItemBuilder::with_id("eye-now", "👀 Take Eye Break Now").build(app)?;
         let stretch_now = MenuItemBuilder::with_id("stretch-now", "🧍 Take Stretch Break Now").build(app)?;
-        let toggle_timers = MenuItemBuilder::with_id("toggle-timers", "⏸ Pause Timers").build(app)?;
-        let sep2 = PredefinedMenuItem::separator(app)?;
+        // let sep2 = PredefinedMenuItem::separator(app)?;
+        // let reset_eye = MenuItemBuilder::with_id("reset-eye", "👀 Reset Eye Timer").build(app)?;
+        // let reset_stretch = MenuItemBuilder::with_id("reset-stretch", "🧍 Reset Stretch Timer").build(app)?;
+        let sep3 = PredefinedMenuItem::separator(app)?;
         let quit = MenuItemBuilder::with_id("quit", "Quit Breaktime").build(app)?;
 
         let menu = Menu::with_items(
@@ -189,8 +192,10 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 &sep1,
                 &eye_now,
                 &stretch_now,
-                &toggle_timers,
-                &sep2,
+                // &sep2,
+                // &reset_eye,
+                // &reset_stretch,
+                &sep3,
                 &quit,
             ],
         )?;
@@ -199,6 +204,22 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             .menu(&menu)
             .tooltip("Breaktime - Screen & Exercise Reminders");
 
+        // Dedicated menu-bar icon. On macOS it is a template image (black
+        // pixels + alpha), so the system tints it black in light mode and
+        // white in dark mode automatically.
+        #[cfg(target_os = "macos")]
+        {
+            match tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon-template.png")) {
+                Ok(icon) => tray = tray.icon(icon).icon_as_template(true),
+                Err(_) => {
+                    if let Some(icon) = app.default_window_icon() {
+                        tray = tray.icon(icon.clone());
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
         if let Some(icon) = app.default_window_icon() {
             tray = tray.icon(icon.clone());
         }
@@ -212,7 +233,6 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 }
             }
             "open-settings" => {
-                let _ = app.emit("open-settings", ());
                 let _ = crate::window_state::exit_overlay_mode(app.clone());
             }
             "eye-now" => {
@@ -221,8 +241,11 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             "stretch-now" => {
                 let _ = app.emit("trigger-break", "stretch");
             }
-            "toggle-timers" => {
-                let _ = app.emit("toggle-timers", ());
+            "reset-eye" => {
+                let _ = app.emit("reset-timer", "eye");
+            }
+            "reset-stretch" => {
+                let _ = app.emit("reset-timer", "stretch");
             }
             "quit" => {
                 app.exit(0);
@@ -237,11 +260,6 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 
 pub fn setup_event_listeners(app: &tauri::App) {
     use tauri::Listener;
-
-    let app_handle = app.handle().clone();
-    app.listen("open-settings", move |_| {
-        let _ = crate::window_state::exit_overlay_mode(app_handle.clone());
-    });
 
     let app_handle = app.handle().clone();
     app.listen("trigger-break", move |_| {

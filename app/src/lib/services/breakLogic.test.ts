@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-	MAX_EVENTS,
-	blinkCountFor,
-	exerciseIndexFor,
-	nextStats,
-	normalizeStats
-} from '$lib/services/breakLogic';
-import { DEFAULT_STATS, type BreakEvent, type BreakStats } from '$lib/types';
+import { MAX_EVENTS, nextStats, normalizeSettings, normalizeStats } from '$lib/services/breakLogic';
+import { DEFAULT_SETTINGS, DEFAULT_STATS, type BreakEvent, type BreakStats } from '$lib/types';
 
 function event(overrides: Partial<BreakEvent> = {}): BreakEvent {
 	return {
@@ -42,6 +36,17 @@ describe('nextStats', () => {
 		expect(stats.eyeExpired).toBe(0);
 	});
 
+	it('records one away-session event without touching break counters', () => {
+		const stats = nextStats(
+			DEFAULT_STATS,
+			event({ type: 'away', action: 'completed', durationSec: 240 })
+		);
+		expect(stats.awayCount).toBe(1);
+		expect(stats.totalAwaySec).toBe(240);
+		expect(stats.totalCompleted).toBe(0); // away returns are not break completions
+		expect(stats.events).toHaveLength(1);
+	});
+
 	it('prepends events and caps the log at MAX_EVENTS', () => {
 		let stats: BreakStats = DEFAULT_STATS;
 		for (let i = 0; i < MAX_EVENTS + 25; i++) {
@@ -74,30 +79,41 @@ describe('normalizeStats', () => {
 	});
 
 	it('keeps known counters', () => {
-		const stats = normalizeStats({ totalExpired: 4, eyeSkipped: 2 });
+		const stats = normalizeStats({ totalExpired: 4, eyeSkipped: 2, awayCount: 7 });
 		expect(stats.totalExpired).toBe(4);
 		expect(stats.eyeSkipped).toBe(2);
+		expect(stats.awayCount).toBe(7);
 	});
 });
 
-describe('guided progress helpers', () => {
-	it('spreads 10 blinks across the break', () => {
-		expect(blinkCountFor(0, 20)).toBe(1);
-		expect(blinkCountFor(10, 20)).toBe(6);
-		expect(blinkCountFor(19, 20)).toBe(10);
-		expect(blinkCountFor(100, 20)).toBe(10);
+describe('normalizeSettings', () => {
+	it('returns defaults for garbage input', () => {
+		expect(normalizeSettings(null)).toEqual(DEFAULT_SETTINGS);
+		expect(normalizeSettings('x')).toEqual(DEFAULT_SETTINGS);
 	});
 
-	it('never divides by zero', () => {
-		expect(blinkCountFor(5, 0)).toBe(1);
-		expect(exerciseIndexFor(5, 0)).toBe(0);
+	it('coerces corrupt numbers instead of leaking NaN into countdown math', () => {
+		const s = normalizeSettings({ ...DEFAULT_SETTINGS, eyeIntervalMin: 'abc' });
+		expect(s.eyeIntervalMin).toBe(DEFAULT_SETTINGS.eyeIntervalMin);
+		expect(Number.isFinite(s.eyeIntervalMin)).toBe(true);
 	});
 
-	it('rotates 4 stretch exercises per quarter', () => {
-		expect(exerciseIndexFor(0, 60)).toBe(0);
-		expect(exerciseIndexFor(15, 60)).toBe(1);
-		expect(exerciseIndexFor(30, 60)).toBe(2);
-		expect(exerciseIndexFor(45, 60)).toBe(3);
-		expect(exerciseIndexFor(59, 60)).toBe(3);
+	it('clamps out-of-range values into sane ranges', () => {
+		const s = normalizeSettings({ ...DEFAULT_SETTINGS, soundRepeat: 99, overlayOpacity: 5 });
+		expect(s.soundRepeat).toBe(5);
+		expect(s.overlayOpacity).toBe(1);
+	});
+
+	it('falls back to the default preset for unknown ids', () => {
+		const s = normalizeSettings({ ...DEFAULT_SETTINGS, soundPreset: 'foghorn' });
+		expect(s.soundPreset).toBe(DEFAULT_SETTINGS.soundPreset);
+	});
+
+	it('fills missing newer fields (overlayOpacity) from older persisted settings', () => {
+		const legacy = { eyeEnabled: false, eyeIntervalMin: 10 } as Record<string, unknown>;
+		const s = normalizeSettings(legacy);
+		expect(s.eyeEnabled).toBe(false);
+		expect(s.eyeIntervalMin).toBe(10);
+		expect(s.overlayOpacity).toBe(DEFAULT_SETTINGS.overlayOpacity);
 	});
 });

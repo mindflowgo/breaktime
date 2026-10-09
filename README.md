@@ -1,10 +1,11 @@
 # Breaktime
 
-A lightweight macOS menu-bar-style app that reminds you to take screen breaks:
-a 👁️ **Eye Reset** every 20 minutes (20-second guided routine with 10 counted
-blinks) and a 🧍 **Move Break** every 45 minutes (60-second guided stretch
-routine). The UI is a small floating HUD overlay; opening settings expands it
-into a full window with reminders, sounds, inactivity and stats tabs.
+A lightweight menu-bar-style app that reminds you to take screen breaks:
+Shows an overlay eye that progressively closes until the break time happens, then 
+plays a gentle sound to encourage breaking from the screen.
+
+It also tracks physical stretch times so you can keep your body healthy inspite of 
+computer time.
 
 ## Tech stack
 

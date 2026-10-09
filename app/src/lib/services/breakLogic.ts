@@ -1,35 +1,38 @@
-import { DEFAULT_STATS, type BreakEvent, type BreakStats } from '$lib/types';
+import {
+	DEFAULT_SETTINGS,
+	DEFAULT_STATS,
+	SOUND_PRESETS,
+	type BreakEvent,
+	type BreakStats,
+	type Settings
+} from '$lib/types';
 
 /** Max number of break history events kept on disk. */
 export const MAX_EVENTS = 100;
 
-/** Guided blink counter: 10 counted blinks spread evenly across the break. */
-export function blinkCountFor(elapsedSec: number, totalSec: number): number {
-	if (totalSec <= 0) return 1;
-	return Math.min(10, Math.floor((elapsedSec / totalSec) * 10) + 1);
-}
-
-/** Guided stretch step: one of 4 exercises per quarter of the break. */
-export function exerciseIndexFor(elapsedSec: number, totalSec: number): number {
-	if (totalSec <= 0) return 0;
-	return Math.min(3, Math.floor((elapsedSec / totalSec) * 4));
-}
-
-/** Pure fold: stats after applying one new break event. */
+/**
+ * Pure fold: stats after applying one new event. Away sessions are recorded
+ * as a single event on return (type 'away', action 'completed', measured
+ * duration), so awayCount/totalAwaySec stay one-per-session.
+ */
 export function nextStats(stats: BreakStats, event: BreakEvent): BreakStats {
 	const isEye = event.type === 'eye';
+	const isStretch = event.type === 'stretch';
+	const isAway = event.type === 'away';
 	const action = event.action;
 
 	return {
-		totalCompleted: (stats.totalCompleted || 0) + (action === 'completed' ? 1 : 0),
+		totalCompleted: (stats.totalCompleted || 0) + (!isAway && action === 'completed' ? 1 : 0),
 		totalSkipped: (stats.totalSkipped || 0) + (action === 'skipped' ? 1 : 0),
 		totalExpired: (stats.totalExpired || 0) + (action === 'expired' ? 1 : 0),
 		eyeCompleted: (stats.eyeCompleted || 0) + (isEye && action === 'completed' ? 1 : 0),
 		eyeSkipped: (stats.eyeSkipped || 0) + (isEye && action === 'skipped' ? 1 : 0),
 		eyeExpired: (stats.eyeExpired || 0) + (isEye && action === 'expired' ? 1 : 0),
-		stretchCompleted: (stats.stretchCompleted || 0) + (!isEye && action === 'completed' ? 1 : 0),
-		stretchSkipped: (stats.stretchSkipped || 0) + (!isEye && action === 'skipped' ? 1 : 0),
-		stretchExpired: (stats.stretchExpired || 0) + (!isEye && action === 'expired' ? 1 : 0),
+		stretchCompleted: (stats.stretchCompleted || 0) + (isStretch && action === 'completed' ? 1 : 0),
+		stretchSkipped: (stats.stretchSkipped || 0) + (isStretch && action === 'skipped' ? 1 : 0),
+		stretchExpired: (stats.stretchExpired || 0) + (isStretch && action === 'expired' ? 1 : 0),
+		awayCount: (stats.awayCount || 0) + (isAway ? 1 : 0),
+		totalAwaySec: (stats.totalAwaySec || 0) + (isAway ? event.durationSec || 0 : 0),
 		events: [event, ...(stats.events || [])].slice(0, MAX_EVENTS)
 	};
 }
@@ -50,6 +53,49 @@ export function normalizeStats(raw: unknown): BreakStats {
 		stretchCompleted: Number(partial.stretchCompleted) || 0,
 		stretchSkipped: Number(partial.stretchSkipped) || 0,
 		stretchExpired: Number(partial.stretchExpired) || 0,
+		awayCount: Number(partial.awayCount) || 0,
+		totalAwaySec: Number(partial.totalAwaySec) || 0,
 		events: Array.isArray(partial.events) ? partial.events : []
+	};
+}
+
+/**
+ * Normalizes a partially-loaded settings object: clamps numbers to sane
+ * ranges, validates the sound preset, defaults unknown fields. Prevents a
+ * corrupt value on disk (e.g. eyeIntervalMin: "abc" → NaN) from poisoning
+ * countdown math.
+ */
+export function normalizeSettings(raw: unknown): Settings {
+	const fallback = DEFAULT_SETTINGS;
+	if (!raw || typeof raw !== 'object') {
+		return { ...fallback };
+	}
+	const s = raw as Record<string, unknown>;
+
+	const num = (v: unknown, def: number, min: number, max: number): number => {
+		const n = Number(v);
+		return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+	};
+	const bool = (v: unknown, def: boolean): boolean => (typeof v === 'boolean' ? v : def);
+
+	const preset = SOUND_PRESETS.some((p) => p.id === s.soundPreset)
+		? (s.soundPreset as Settings['soundPreset'])
+		: fallback.soundPreset;
+
+	return {
+		eyeEnabled: bool(s.eyeEnabled, fallback.eyeEnabled),
+		eyeIntervalMin: num(s.eyeIntervalMin, fallback.eyeIntervalMin, 1, 240),
+		eyeDurationSec: num(s.eyeDurationSec, fallback.eyeDurationSec, 5, 300),
+		stretchEnabled: bool(s.stretchEnabled, fallback.stretchEnabled),
+		stretchIntervalMin: num(s.stretchIntervalMin, fallback.stretchIntervalMin, 1, 480),
+		stretchDurationSec: num(s.stretchDurationSec, fallback.stretchDurationSec, 10, 600),
+		soundPreset: preset,
+		soundVolume: num(s.soundVolume, fallback.soundVolume, 0.05, 1),
+		soundFadeIn: bool(s.soundFadeIn, fallback.soundFadeIn),
+		soundRepeat: num(s.soundRepeat, fallback.soundRepeat, 1, 5),
+		idleThresholdSec: num(s.idleThresholdSec, fallback.idleThresholdSec, 30, 3600),
+		awayResetMin: num(s.awayResetMin, fallback.awayResetMin, 1, 120),
+		overlayOpacity: num(s.overlayOpacity, fallback.overlayOpacity, 0.2, 1),
+		hud2x: bool(s.hud2x, fallback.hud2x)
 	};
 }

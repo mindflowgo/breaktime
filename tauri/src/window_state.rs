@@ -47,13 +47,19 @@ impl Default for AppWindowState {
     }
 }
 
-/// A monitor rectangle in physical pixels.
+/// A monitor rectangle in physical pixels plus its scale factor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MonitorRect {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MonitorInfo {
+    rect: MonitorRect,
+    scale: f64,
 }
 
 /// Clamp a window (physical origin + physical size) so it lands fully inside
@@ -81,50 +87,71 @@ pub fn clamp_rect(
     None
 }
 
-fn physical_monitors<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<MonitorRect> {
+fn monitors_with_scale<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<MonitorInfo> {
     app.available_monitors()
         .map(|monitors| {
             monitors
                 .iter()
-                .map(|mon| MonitorRect {
-                    x: mon.position().x,
-                    y: mon.position().y,
-                    width: mon.size().width as i32,
-                    height: mon.size().height as i32,
+                .map(|mon| MonitorInfo {
+                    rect: MonitorRect {
+                        x: mon.position().x,
+                        y: mon.position().y,
+                        width: mon.size().width as i32,
+                        height: mon.size().height as i32,
+                    },
+                    scale: mon.scale_factor(),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn default_overlay_rect(monitors: &[MonitorRect]) -> (i32, i32) {
+fn rects_of(monitors: &[MonitorInfo]) -> Vec<MonitorRect> {
+    monitors.iter().map(|m| m.rect).collect()
+}
+
+/// Scale factor of the monitor containing the given physical point (fallback:
+/// first monitor, then 1.0) — the correct scale for mixed-DPI layouts.
+fn scale_at_point(monitors: &[MonitorInfo], x: i32, y: i32) -> f64 {
+    for m in monitors {
+        if x >= m.rect.x && x < m.rect.x + m.rect.width && y >= m.rect.y && y < m.rect.y + m.rect.height
+        {
+            return m.scale;
+        }
+    }
+    monitors.first().map(|m| m.scale).unwrap_or(1.0)
+}
+
+fn default_overlay_rect(monitors: &[MonitorInfo]) -> (i32, i32) {
     monitors
         .first()
-        .map(|m| (m.x + 60, m.y + 100))
+        .map(|m| (m.rect.x + 60, m.rect.y + 100))
         .unwrap_or((60, 100))
 }
 
-fn default_main_rect(monitors: &[MonitorRect]) -> (i32, i32) {
+fn default_main_rect(monitors: &[MonitorInfo]) -> (i32, i32) {
     monitors
         .first()
-        .map(|m| (m.x + 100, m.y + 100))
+        .map(|m| (m.rect.x + 100, m.rect.y + 100))
         .unwrap_or((100, 100))
 }
 
-/// Clamp an overlay window position (physical px) against available monitors.
+/// Clamp an overlay window position (physical px). The HUD's physical size is
+/// derived from the scale of the monitor the HUD actually sits on.
 pub fn clamp_overlay_position<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     x: Option<f64>,
     y: Option<f64>,
 ) -> (f64, f64) {
-    let monitors = physical_monitors(app);
-    let scale = app.primary_monitor().ok().flatten().map(|m| m.scale_factor()).unwrap_or(1.0);
-    let (w, h) = (
-        (IDLE_HUD_WIDTH * scale) as i32,
-        (IDLE_HUD_HEIGHT * scale) as i32,
-    );
+    let monitors = monitors_with_scale(app);
+    let rects = rects_of(&monitors);
     if let (Some(x), Some(y)) = (x, y) {
-        if let Some((cx, cy)) = clamp_rect(x as i32, y as i32, w, h, &monitors) {
+        let scale = scale_at_point(&monitors, x as i32, y as i32);
+        let (w, h) = (
+            (IDLE_HUD_WIDTH * scale) as i32,
+            (IDLE_HUD_HEIGHT * scale) as i32,
+        );
+        if let Some((cx, cy)) = clamp_rect(x as i32, y as i32, w, h, &rects) {
             return (cx as f64, cy as f64);
         }
     }
@@ -132,15 +159,21 @@ pub fn clamp_overlay_position<R: tauri::Runtime>(
     (dx as f64, dy as f64)
 }
 
-/// Clamp the main (settings) window position (physical px).
+/// Clamp the main (settings) window position (physical px). The footprint
+/// uses the window's *stored* size scaled by the containing monitor.
 pub fn clamp_main_position<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     x: Option<f64>,
     y: Option<f64>,
+    logical_w: f64,
+    logical_h: f64,
 ) -> (f64, f64) {
-    let monitors = physical_monitors(app);
+    let monitors = monitors_with_scale(app);
+    let rects = rects_of(&monitors);
     if let (Some(x), Some(y)) = (x, y) {
-        if let Some((cx, cy)) = clamp_rect(x as i32, y as i32, 680, 560, &monitors) {
+        let scale = scale_at_point(&monitors, x as i32, y as i32);
+        let (w, h) = ((logical_w * scale) as i32, (logical_h * scale) as i32);
+        if let Some((cx, cy)) = clamp_rect(x as i32, y as i32, w, h, &rects) {
             return (cx as f64, cy as f64);
         }
     }
@@ -169,6 +202,12 @@ pub fn setup_macos_overlay_spaces(overlay_win: &tauri::WebviewWindow) {
 // ---------------------------------------------------------------------------
 // Cached window state with throttled, atomic persistence
 // ---------------------------------------------------------------------------
+//
+// Lock discipline: never hold the MutexGuard across window roundtrips
+// (outer_position/set_position/…). On macOS the panel delegate fires
+// window_did_move synchronously inside set_position, and off-main-thread
+// window getters block on the event loop — holding the guard through either
+// can deadlock. Mutators follow read → act (unlocked) → write-back.
 
 pub struct CachedWindowState {
     pub state: AppWindowState,
@@ -188,6 +227,18 @@ pub fn manage_window_state(app: &mut tauri::App, state: AppWindowState) {
     })));
 }
 
+/// Read a clone of the cached state (used by the dock-reopen handler).
+pub fn cached_window_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> AppWindowState {
+    match app.try_state::<WindowStateCache>() {
+        Some(cache) => cache
+            .0
+            .lock()
+            .map(|guard| guard.state.clone())
+            .unwrap_or_default(),
+        None => AppWindowState::default(),
+    }
+}
+
 /// Mutate the cached state and persist at most once per PERSIST_THROTTLE.
 /// The trailing dirty state is flushed on app exit (see run() in lib.rs).
 pub fn mutate_window_state<R: tauri::Runtime>(
@@ -195,8 +246,11 @@ pub fn mutate_window_state<R: tauri::Runtime>(
     mutate: impl FnOnce(&mut AppWindowState),
 ) {
     let (snapshot, should_persist) = {
-        let cache = app.state::<WindowStateCache>();
-        let mut guard = cache.0.lock().expect("window state mutex poisoned");
+        let Some(cache) = app.try_state::<WindowStateCache>() else { return };
+        let mut guard = match cache.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         mutate(&mut guard.state);
         guard.dirty = true;
         let should = guard.last_persist.elapsed() >= PERSIST_THROTTLE;
@@ -205,39 +259,86 @@ pub fn mutate_window_state<R: tauri::Runtime>(
         }
         (guard.state.clone(), should)
     };
-    if should_persist {
-        let _ = persist_state_snapshot(app, &snapshot);
+    if should_persist && persist_state_snapshot(app, &snapshot).is_ok() {
+        clear_dirty(app);
     }
 }
 
 /// Mutate the cached state and persist immediately (mode changes are rare).
+/// Returns the persisted snapshot.
 pub fn mutate_window_state_now<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     mutate: impl FnOnce(&mut AppWindowState),
 ) -> AppWindowState {
     let snapshot = {
-        let cache = app.state::<WindowStateCache>();
-        let mut guard = cache.0.lock().expect("window state mutex poisoned");
+        let Some(cache) = app.try_state::<WindowStateCache>() else {
+            // Cache not managed yet (early startup): run the mutation on a default.
+            let mut state = AppWindowState::default();
+            mutate(&mut state);
+            return state;
+        };
+        let mut guard = match cache.0.lock() {
+            Ok(g) => g,
+            // Poisoned lock: fall back to a fresh default so a panicking
+            // callback cannot brick window management entirely.
+            Err(poisoned) => poisoned.into_inner(),
+        };
         mutate(&mut guard.state);
         guard.last_persist = std::time::Instant::now();
+        guard.dirty = true;
         guard.state.clone()
     };
     let _ = persist_state_snapshot(app, &snapshot);
+    clear_dirty(app);
     snapshot
+}
+
+/// Write a full snapshot back into the cache and persist immediately
+/// (used after unlocked window operations produced the final values).
+fn commit_window_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: AppWindowState,
+) -> AppWindowState {
+    let cache = app.try_state::<WindowStateCache>();
+    if let Some(cache) = cache {
+        if let Ok(mut guard) = cache.0.lock() {
+            guard.state = state.clone();
+            guard.dirty = true;
+            guard.last_persist = std::time::Instant::now();
+        }
+    }
+    let _ = persist_state_snapshot(app, &state);
+    clear_dirty(app);
+    state
+}
+
+fn clear_dirty<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(cache) = app.try_state::<WindowStateCache>() {
+        if let Ok(mut guard) = cache.0.lock() {
+            guard.dirty = false;
+        }
+    }
 }
 
 /// Flush any pending dirty state to disk (called on app exit).
 pub fn flush_window_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let snapshot = {
-        let cache = app.state::<WindowStateCache>();
-        let mut guard = cache.0.lock().expect("window state mutex poisoned");
+        let Some(cache) = app.try_state::<WindowStateCache>() else {
+            return;
+        };
+        let mut guard = match cache.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if !guard.dirty {
             return;
         }
         guard.last_persist = std::time::Instant::now();
         guard.state.clone()
     };
-    let _ = persist_state_snapshot(app, &snapshot);
+    if persist_state_snapshot(app, &snapshot).is_ok() {
+        clear_dirty(app);
+    }
 }
 
 fn persist_state_snapshot<R: tauri::Runtime>(
@@ -255,19 +356,6 @@ fn persist_state_snapshot<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn get_window_state(app: tauri::AppHandle) -> Result<AppWindowState, String> {
-    let cache = app.state::<WindowStateCache>();
-    let guard = cache.0.lock().map_err(|e| e.to_string())?;
-    Ok(guard.state.clone())
-}
-
-#[tauri::command]
-pub fn save_window_state(app: tauri::AppHandle, state: AppWindowState) -> Result<(), String> {
-    mutate_window_state_now(&app, |cached| *cached = state.clone());
-    Ok(())
-}
-
-#[tauri::command]
 pub fn exit_app(app: tauri::AppHandle) {
     flush_window_state(&app);
     app.exit(0);
@@ -275,89 +363,121 @@ pub fn exit_app(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String> {
-    let snapshot = mutate_window_state_now(&app, |state| {
-        // 1. Capture current main window position & size, then hide it
-        if let Some(main_win) = app.get_webview_window("main") {
-            if let (Ok(phys_pos), Ok(phys_size)) = (main_win.outer_position(), main_win.outer_size()) {
-                let scale = main_win.scale_factor().unwrap_or(1.0);
-                let logical_w = phys_size.width as f64 / scale;
-                let logical_h = phys_size.height as f64 / scale;
-                if logical_w > 400.0 && logical_h > 300.0 {
-                    state.normal = WindowBounds {
-                        width: logical_w,
-                        height: logical_h,
-                        x: Some(phys_pos.x as f64),
-                        y: Some(phys_pos.y as f64),
-                    };
-                }
+    // Cheap re-entry: switching to overlay mode while already minimalist
+    // (natural timer breaks, tray break-now) must not reset the HUD size or
+    // position — a break may be expanding the window right after this.
+    let (mut snapshot, already_min) = {
+        let Some(cache) = app.try_state::<WindowStateCache>() else {
+            return Ok(AppWindowState::default());
+        };
+        let Ok(guard) = cache.0.lock() else {
+            return Ok(AppWindowState::default());
+        };
+        let already = guard.state.mode == "minimalist";
+        (guard.state.clone(), already)
+    };
+
+    if already_min {
+        // Ensure the panel is visible, nothing else.
+        let _ = crate::native::show_overlay_panel(&app);
+        return Ok(snapshot);
+    }
+
+    // 1. Capture current main window position & size, then hide it (no lock held).
+    if let Some(main_win) = app.get_webview_window("main") {
+        if let (Ok(phys_pos), Ok(phys_size)) = (main_win.outer_position(), main_win.outer_size()) {
+            let scale = main_win.scale_factor().unwrap_or(1.0);
+            let logical_w = phys_size.width as f64 / scale;
+            let logical_h = phys_size.height as f64 / scale;
+            if logical_w > 400.0 && logical_h > 300.0 {
+                snapshot.normal = WindowBounds {
+                    width: logical_w,
+                    height: logical_h,
+                    x: Some(phys_pos.x as f64),
+                    y: Some(phys_pos.y as f64),
+                };
             }
-            let _ = main_win.hide();
         }
+        let _ = main_win.hide();
+    }
 
-        state.mode = "minimalist".to_string();
+    snapshot.mode = "minimalist".to_string();
 
-        // 2. Show overlay window at clamped minimalist position
-        if let Some(overlay_win) = app.get_webview_window("overlay") {
-            state.minimalist.width = IDLE_HUD_WIDTH;
-            state.minimalist.height = IDLE_HUD_HEIGHT;
-            let _ = overlay_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-                IDLE_HUD_WIDTH,
-                IDLE_HUD_HEIGHT,
-            )));
+    // 2. Show overlay window at clamped minimalist position.
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        snapshot.minimalist.width = IDLE_HUD_WIDTH;
+        snapshot.minimalist.height = IDLE_HUD_HEIGHT;
+        let _ = overlay_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            IDLE_HUD_WIDTH,
+            IDLE_HUD_HEIGHT,
+        )));
 
-            let (clamped_x, clamped_y) =
-                clamp_overlay_position(&app, state.minimalist.x, state.minimalist.y);
-            state.minimalist.x = Some(clamped_x);
-            state.minimalist.y = Some(clamped_y);
-            let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                clamped_x as i32,
-                clamped_y as i32,
-            )));
+        let (clamped_x, clamped_y) =
+            clamp_overlay_position(&app, snapshot.minimalist.x, snapshot.minimalist.y);
+        snapshot.minimalist.x = Some(clamped_x);
+        snapshot.minimalist.y = Some(clamped_y);
+        let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            clamped_x as i32,
+            clamped_y as i32,
+        )));
 
-            #[cfg(target_os = "macos")]
-            setup_macos_overlay_spaces(&overlay_win);
+        #[cfg(target_os = "macos")]
+        setup_macos_overlay_spaces(&overlay_win);
 
-            let _ = overlay_win.set_always_on_top(true);
-            let _ = crate::native::show_overlay_panel(&app);
-        }
-    });
-    Ok(snapshot)
+        let _ = overlay_win.set_always_on_top(true);
+        let _ = crate::native::show_overlay_panel(&app);
+    }
+
+    Ok(commit_window_state(&app, snapshot))
 }
 
 #[tauri::command]
 pub fn exit_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String> {
-    let snapshot = mutate_window_state_now(&app, |state| {
-        if let Some(overlay_win) = app.get_webview_window("overlay") {
-            if let Ok(phys_pos) = overlay_win.outer_position() {
-                state.minimalist.x = Some(phys_pos.x as f64);
-                state.minimalist.y = Some(phys_pos.y as f64);
-            }
-            state.minimalist.width = IDLE_HUD_WIDTH;
-            state.minimalist.height = IDLE_HUD_HEIGHT;
-            let _ = crate::native::hide_overlay_panel(&app);
+    let (mut snapshot, already_normal) = {
+        let Some(cache) = app.try_state::<WindowStateCache>() else {
+            return Ok(AppWindowState::default());
+        };
+        let Ok(guard) = cache.0.lock() else {
+            return Ok(AppWindowState::default());
+        };
+        let already = guard.state.mode == "normal";
+        (guard.state.clone(), already)
+    };
+
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        if let Ok(phys_pos) = overlay_win.outer_position() {
+            snapshot.minimalist.x = Some(phys_pos.x as f64);
+            snapshot.minimalist.y = Some(phys_pos.y as f64);
         }
+        snapshot.minimalist.width = IDLE_HUD_WIDTH;
+        snapshot.minimalist.height = IDLE_HUD_HEIGHT;
+        let _ = crate::native::hide_overlay_panel(&app);
+    }
 
-        state.mode = "normal".to_string();
+    snapshot.mode = "normal".to_string();
 
-        if let Some(main_win) = app.get_webview_window("main") {
-            let target = state.normal.clone();
-            let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-                target.width,
-                target.height,
-            )));
-            let (clamped_x, clamped_y) = clamp_main_position(&app, target.x, target.y);
-            state.normal.x = Some(clamped_x);
-            state.normal.y = Some(clamped_y);
-            let _ = main_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                clamped_x as i32,
-                clamped_y as i32,
-            )));
-            let _ = main_win.set_always_on_top(false);
+    if let Some(main_win) = app.get_webview_window("main") {
+        let target = snapshot.normal.clone();
+        let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            target.width,
+            target.height,
+        )));
+        let (clamped_x, clamped_y) =
+            clamp_main_position(&app, target.x, target.y, target.width, target.height);
+        snapshot.normal.x = Some(clamped_x);
+        snapshot.normal.y = Some(clamped_y);
+        let _ = main_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            clamped_x as i32,
+            clamped_y as i32,
+        )));
+        let _ = main_win.set_always_on_top(false);
+        if !already_normal {
             let _ = main_win.show();
             let _ = main_win.set_focus();
         }
-    });
-    Ok(snapshot)
+    }
+
+    Ok(commit_window_state(&app, snapshot))
 }
 
 #[tauri::command]

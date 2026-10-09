@@ -6,7 +6,7 @@ pub mod native;
 pub mod settings;
 pub mod window_state;
 
-pub use window_state::*;
+use window_state::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,6 +19,11 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
             let _ = native::setup_tray(app);
             native::setup_event_listeners(app);
 
@@ -37,6 +42,11 @@ pub fn run() {
             let main_win = app.get_webview_window("main");
             let overlay_win = app.get_webview_window("overlay");
 
+            // Manage the state cache BEFORE installing the panel delegate:
+            // the macOS window_did_move callback mutates the cache, and a
+            // set_position during setup can fire it synchronously.
+            manage_window_state(app, state.clone());
+
             if let Some(ref overlay) = overlay_win {
                 #[cfg(target_os = "macos")]
                 {
@@ -52,7 +62,8 @@ pub fn run() {
                 if let Some(main) = main_win {
                     let target = &state.normal;
                     let _ = main.set_size(tauri::Size::Logical(tauri::LogicalSize::new(target.width, target.height)));
-                    let (clamped_x, clamped_y) = clamp_main_position(app.handle(), target.x, target.y);
+                    let (clamped_x, clamped_y) =
+                        clamp_main_position(app.handle(), target.x, target.y, target.width, target.height);
                     state.normal.x = Some(clamped_x);
                     state.normal.y = Some(clamped_y);
                     let _ = main.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
@@ -85,9 +96,11 @@ pub fn run() {
                 }
             }
 
-            // Keep the authoritative in-memory copy; drag/resize events mutate
-            // it and persist (throttled + atomic) from there.
-            manage_window_state(app, state);
+            // Sync the post-positioning state (clamped coordinates) into the
+            // managed cache; drag/resize events mutate it from here on.
+            if app.try_state::<window_state::WindowStateCache>().is_some() {
+                mutate_window_state_now(app.handle(), |cached| *cached = state.clone());
+            }
 
             Ok(())
         })
@@ -135,8 +148,6 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            window_state::get_window_state,
-            window_state::save_window_state,
             window_state::exit_app,
             window_state::enter_overlay_mode,
             window_state::exit_overlay_mode,
@@ -151,7 +162,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
                 if !has_visible_windows {
-                    let state = get_window_state(app_handle.clone()).unwrap_or_default();
+                    let state = cached_window_state(app_handle);
                     if state.mode == "normal" {
                         if let Some(main) = app_handle.get_webview_window("main") {
                             let _ = main.show();

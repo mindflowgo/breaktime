@@ -1,77 +1,42 @@
-import { playSound } from '$lib/services/soundPlayer';
+import { playBreakEnd, playSound } from '$lib/services/soundPlayer';
 import { settingsStore } from '$lib/services/settingsStore.svelte';
 import {
 	emitTauriEvent,
 	listenTauriEvent,
 	isMasterWindow,
 	isTauriEnvironment,
+	enterOverlayMode,
 	setOverlayWindowSize,
 	tauriInvoke,
 	IDLE_HUD_WIDTH,
 	IDLE_HUD_HEIGHT
 } from '$lib/services/windowManager';
-import { blinkCountFor, exerciseIndexFor } from '$lib/services/breakLogic';
-import type { BreakType, HudSize, Settings, TimerCommand, TimerStateSync } from '$lib/types';
+import {
+	EV_COMMAND,
+	EV_QUERY_STATE,
+	EV_RESET_TIMER,
+	EV_RESET_TIMERS,
+	EV_STATE_SYNC,
+	EV_SYSTEM_IDLE,
+	EV_TRIGGER_BREAK
+} from '$lib/services/events';
+import {
+	DEFAULT_SETTINGS,
+	type BreakType,
+	type Settings,
+	type TimerCommand,
+	type TimerStateSync
+} from '$lib/types';
 
-export const EYE_HUD_WIDTH = 104;
+/** Overlay window size while an eye break is active. */
+export const EYE_HUD_WIDTH = 136;
 export const EYE_HUD_HEIGHT = 48;
-export const STRETCH_HUD_WIDTH = 104;
+/** Overlay window size while a stretch break is active (larger figure). */
+export const STRETCH_HUD_WIDTH = 136;
 export const STRETCH_HUD_HEIGHT = 48;
 
-export interface StretchExercise {
-	step: number;
-	shortName: string;
-	title: string;
-	desc: string;
-	tip: string;
-}
-
-export const STRETCH_EXERCISES: StretchExercise[] = [
-	{
-		step: 1,
-		shortName: 'Walk',
-		title: 'Stand up & walk',
-		desc: 'Step away from your desk and take a few easy paces',
-		tip: 'Breaks static sitting posture and reactivates legs'
-	},
-	{
-		step: 2,
-		shortName: 'Arms',
-		title: 'Stretch your arms',
-		desc: 'Reach high overhead and gently interlock your fingers',
-		tip: 'Decompresses spine and opens ribcage'
-	},
-	{
-		step: 3,
-		shortName: 'Shoulders',
-		title: 'Roll your shoulders',
-		desc: 'Roll shoulders backward 5 times, then smoothly forward',
-		tip: 'Releases tension across traps, upper back, and neck'
-	},
-	{
-		step: 4,
-		shortName: 'Squats',
-		title: 'Gentle squats',
-		desc: 'Perform 3–5 slow, relaxed squats at your own pace',
-		tip: 'Restores healthy blood flow through hips and core'
-	}
-];
-
-export const EYE_INSTRUCTIONS = [
-	'Look 20 feet (6m) away into the distance',
-	'Relax your facial, brow, and forehead muscles',
-	'Blink gently to refresh your natural tear film',
-	'Shift focus toward a window or far corner',
-	'Release tension around your temples',
-	'Blink naturally and soften your visual gaze',
-	'Breathe deeply — disconnect from digital pixels',
-	'Let your peripheral field open up smoothly',
-	'One more slow, gentle blink into the distance',
-	'Almost done — eyes refreshed, relaxed & clear'
-];
-
 class TimerManager {
-	// Master identity
+	// Master identity: only the overlay window owns countdown state.
 	isMaster = $state(false);
 
 	// Status
@@ -80,8 +45,8 @@ class TimerManager {
 	activeBreak = $state<BreakType | null>(null);
 
 	// Time remaining in seconds
-	eyeTimeRemaining = $state(20 * 60);
-	stretchTimeRemaining = $state(45 * 60);
+	eyeTimeRemaining = $state(DEFAULT_SETTINGS.eyeIntervalMin * 60);
+	stretchTimeRemaining = $state(DEFAULT_SETTINGS.stretchIntervalMin * 60);
 	breakTimeRemaining = $state(0);
 
 	// Timestamp targets for drift-free calculations
@@ -89,20 +54,18 @@ class TimerManager {
 	stretchTargetTimestamp = $state<number | null>(null);
 	breakTargetTimestamp = $state<number | null>(null);
 
-	// Guided animations
-	blinkCount = $state(1); // 1 to 10
-	currentExerciseIndex = $state(0); // 0 to 3
-
 	// Idle & Away tracking
 	awayStartTime = $state<number | null>(null);
 
-	// Custom compact HUD size (persisted as settings.hudSize)
-	idleHudSize = $state<HudSize>({ width: IDLE_HUD_WIDTH, height: IDLE_HUD_HEIGHT });
-
 	private lastTickTime = Date.now();
+	/** Highest state-sync timestamp seen; older mirrors are dropped. */
+	private lastSyncTimestamp = 0;
 
 	private timerInterval: ReturnType<typeof setInterval> | null = null;
+	private electionTimeout: ReturnType<typeof setTimeout> | null = null;
 	private initialized = false;
+	/** Bumped by destroy(); late-resolving unlistens from an older generation self-remove. */
+	private generation = 0;
 	private unlistenFns: (() => void)[] = [];
 
 	async init() {
@@ -111,34 +74,46 @@ class TimerManager {
 
 		await settingsStore.init();
 
-		const master = isMasterWindow();
-		this.isMaster = master;
+		this.isMaster = isMasterWindow();
 
+		// Single settings channel: the store notifies for local changes and
+		// (in the master) for cross-window changes after echo suppression.
 		settingsStore.onSettingsChange((newSettings) => {
 			if (this.isMaster) {
 				this.handleSettingsChanged(newSettings);
 			}
 		});
 
-		settingsStore.onStatsReset(() => {
-			this.resetTimers();
-		});
+		// Stats reset: non-master forwards the intent as a command; the master
+		// acts on the command (avoiding a second path via the broadcast event).
+		if (!this.isMaster) {
+			settingsStore.onStatsReset(() => {
+				this.resetTimers();
+			});
+		}
 
 		if (this.isMaster) {
-			this.initMaster();
+			await this.initMaster();
 		} else {
-			this.initNonMaster();
+			await this.initNonMaster();
 		}
+	}
+
+	private trackUnlisten(pending: Promise<() => void>) {
+		const gen = this.generation;
+		pending.then((fn) => {
+			if (gen === this.generation) {
+				this.unlistenFns.push(fn);
+			} else {
+				try {
+					fn();
+				} catch {}
+			}
+		});
 	}
 
 	private async initMaster() {
 		this.resetTimersInternal();
-
-		// Restore custom compact HUD size if the user resized the grip before
-		this.idleHudSize = settingsStore.settings.hudSize ?? {
-			width: IDLE_HUD_WIDTH,
-			height: IDLE_HUD_HEIGHT
-		};
 
 		// Start authoritative 1s tick loop
 		this.lastTickTime = Date.now();
@@ -148,77 +123,78 @@ class TimerManager {
 		// Initialize native Tauri idle monitor
 		await this.initIdleMonitor();
 
-		// Listen to commands from non-master windows ('breaktime:command')
-		const unlistenCmd = await listenTauriEvent<TimerCommand>('breaktime:command', async (cmd) => {
-			if (this.isMaster && cmd) {
-				await this.handleCommand(cmd);
-			}
-		});
-		this.unlistenFns.push(unlistenCmd);
+		// Commands from non-master windows
+		this.trackUnlisten(
+			listenTauriEvent<TimerCommand>(EV_COMMAND, async (cmd) => {
+				if (this.isMaster && cmd) {
+					await this.handleCommand(cmd);
+				}
+			})
+		);
 
-		// Listen to query state requests from non-master windows
-		const unlistenQuery = await listenTauriEvent('breaktime:query-state', () => {
-			if (this.isMaster) {
-				this.emitStateSync();
-			}
-		});
-		this.unlistenFns.push(unlistenQuery);
+		// State sync requests from non-master windows
+		this.trackUnlisten(
+			listenTauriEvent(EV_QUERY_STATE, () => {
+				if (this.isMaster) {
+					this.emitStateSync();
+				}
+			})
+		);
 
-		// Listen to Tray menu events
-		const unlistenTrigger = await listenTauriEvent<string>('trigger-break', async (type) => {
-			if (this.isMaster && (type === 'eye' || type === 'stretch')) {
-				await this.triggerBreak(type as BreakType);
-			}
-		});
-		this.unlistenFns.push(unlistenTrigger);
+		// Tray menu events (emitted from Rust)
+		this.trackUnlisten(
+			listenTauriEvent<string>(EV_TRIGGER_BREAK, (type) => {
+				if (this.isMaster && (type === 'eye' || type === 'stretch')) {
+					void this.triggerBreak(type);
+				}
+			})
+		);
 
-		const unlistenToggle = await listenTauriEvent('toggle-timers', () => {
-			if (this.isMaster) {
-				this.togglePause();
-			}
-		});
-		this.unlistenFns.push(unlistenToggle);
+		this.trackUnlisten(
+			listenTauriEvent(EV_RESET_TIMERS, () => {
+				if (this.isMaster) {
+					this.resetTimers();
+				}
+			})
+		);
 
-		// Listen to settings changes to adjust countdown intervals
-		const unlistenSettings = await listenTauriEvent<Settings>('breaktime:settings-changed', (newSettings) => {
-			if (this.isMaster && newSettings) {
-				this.handleSettingsChanged(newSettings);
-			}
-		});
-		this.unlistenFns.push(unlistenSettings);
-
-		// Listen to stats reset / timer reset events
-		const unlistenStatsReset = await listenTauriEvent('breaktime:stats-reset', () => {
-			if (this.isMaster) {
-				this.resetTimers();
-			}
-		});
-		this.unlistenFns.push(unlistenStatsReset);
+		this.trackUnlisten(
+			listenTauriEvent<string>(EV_RESET_TIMER, (type) => {
+				if (this.isMaster && (type === 'eye' || type === 'stretch')) {
+					this.resetTimer(type);
+				}
+			})
+		);
 
 		// Broadcast initial authoritative state
 		this.emitStateSync();
 	}
 
 	private async initNonMaster() {
-		// Listen to state synchronization from Master window
-		const unlistenSync = await listenTauriEvent<TimerStateSync>('breaktime:state-sync', (sync) => {
-			if (!this.isMaster && sync) {
-				this.handleStateSync(sync);
-			}
-		});
-		this.unlistenFns.push(unlistenSync);
+		this.trackUnlisten(
+			listenTauriEvent<TimerStateSync>(EV_STATE_SYNC, (sync) => {
+				if (!this.isMaster && sync) {
+					this.handleStateSync(sync);
+				}
+			})
+		);
 
-		// Query current state immediately
-		await emitTauriEvent('breaktime:query-state');
+		// Ask for state; retry a few times in case the master's listener
+		// isn't registered yet (startup ordering).
+		for (let attempt = 0; attempt < 3; attempt++) {
+			await emitTauriEvent(EV_QUERY_STATE);
+			await new Promise((r) => setTimeout(r, 500));
+			if (this.lastSyncTimestamp > 0) break;
+		}
 
-		// Browser fallback: if not running in Tauri and no master responds after 1.5s,
-		// elect this instance as master so standalone web development works smoothly.
-		if (!isTauriEnvironment()) {
-			setTimeout(() => {
+		// Browser fallback: if not running in Tauri and no master responded,
+		// elect this instance as master so standalone web development works.
+		if (!isTauriEnvironment() && this.lastSyncTimestamp === 0) {
+			this.electionTimeout = setTimeout(() => {
 				if (!this.isMaster && this.eyeTargetTimestamp === null && this.breakTimeRemaining === 0) {
 					console.log('[TimerManager] Standalone browser mode: electing as master');
 					this.isMaster = true;
-					this.initMaster();
+					void this.initMaster();
 				}
 			}, 1500);
 		}
@@ -229,13 +205,13 @@ class TimerManager {
 
 		await this.applyIdleThreshold(settingsStore.settings.idleThresholdSec || 300);
 
-		// Listen to system:idle event from tauri-plugin-idlemonitor
-		const unlistenIdle = await listenTauriEvent<{ idle: boolean; seconds?: number }>('system:idle', (payload) => {
-			if (this.isMaster && payload) {
-				this.handleIdleStateChange(payload.idle, payload.seconds);
-			}
-		});
-		this.unlistenFns.push(unlistenIdle);
+		this.trackUnlisten(
+			listenTauriEvent<{ idle: boolean; seconds?: number }>(EV_SYSTEM_IDLE, (payload) => {
+				if (this.isMaster && payload) {
+					this.handleIdleStateChange(payload.idle, payload.seconds);
+				}
+			})
+		);
 	}
 
 	/**
@@ -260,6 +236,8 @@ class TimerManager {
 
 	private handleStateSync(sync: TimerStateSync) {
 		if (this.isMaster) return;
+		if (sync.timestamp && sync.timestamp <= this.lastSyncTimestamp) return; // stale
+		this.lastSyncTimestamp = sync.timestamp || this.lastSyncTimestamp;
 
 		this.isPaused = sync.isPaused;
 		this.isIdle = sync.isIdle;
@@ -267,8 +245,6 @@ class TimerManager {
 		this.eyeTimeRemaining = sync.eyeTimeRemaining;
 		this.stretchTimeRemaining = sync.stretchTimeRemaining;
 		this.breakTimeRemaining = sync.breakTimeRemaining;
-		this.blinkCount = sync.blinkCount;
-		this.currentExerciseIndex = sync.currentExerciseIndex;
 		this.awayStartTime = sync.awayStartTime;
 		this.eyeTargetTimestamp = sync.eyeTargetTimestamp;
 		this.stretchTargetTimestamp = sync.stretchTargetTimestamp;
@@ -296,6 +272,11 @@ class TimerManager {
 			case 'reset-timers':
 				this.resetTimers();
 				break;
+			case 'reset-timer':
+				if (cmd.type === 'eye' || cmd.type === 'stretch') {
+					this.resetTimer(cmd.type);
+				}
+				break;
 		}
 	}
 
@@ -307,17 +288,12 @@ class TimerManager {
 			void this.applyIdleThreshold(newSettings.idleThresholdSec);
 		}
 
-		// Track custom HUD size without touching countdowns
-		if (newSettings.hudSize) {
-			this.idleHudSize = newSettings.hudSize;
-		}
-
 		const now = Date.now();
 
-		// If eye setting interval updated and not in active break
+		// Clamp / re-arm countdowns when intervals shrink (not during a break)
 		if (!this.activeBreak) {
 			if (newSettings.eyeEnabled) {
-				const maxSec = (newSettings.eyeIntervalMin || 20) * 60;
+				const maxSec = this.intervalSecFor('eye');
 				if (this.eyeTimeRemaining > maxSec) {
 					this.eyeTimeRemaining = maxSec;
 				}
@@ -329,7 +305,7 @@ class TimerManager {
 			}
 
 			if (newSettings.stretchEnabled) {
-				const maxSec = (newSettings.stretchIntervalMin || 45) * 60;
+				const maxSec = this.intervalSecFor('stretch');
 				if (this.stretchTimeRemaining > maxSec) {
 					this.stretchTimeRemaining = maxSec;
 				}
@@ -354,8 +330,6 @@ class TimerManager {
 			eyeTimeRemaining: this.eyeTimeRemaining,
 			stretchTimeRemaining: this.stretchTimeRemaining,
 			breakTimeRemaining: this.breakTimeRemaining,
-			blinkCount: this.blinkCount,
-			currentExerciseIndex: this.currentExerciseIndex,
 			awayStartTime: this.awayStartTime,
 			eyeTargetTimestamp: this.eyeTargetTimestamp,
 			stretchTargetTimestamp: this.stretchTargetTimestamp,
@@ -363,7 +337,7 @@ class TimerManager {
 			timestamp: Date.now()
 		};
 
-		emitTauriEvent('breaktime:state-sync', payload);
+		emitTauriEvent(EV_STATE_SYNC, payload);
 	}
 
 	handleIdleStateChange(isIdle: boolean, idleSeconds?: number) {
@@ -377,14 +351,25 @@ class TimerManager {
 		} else {
 			if (this.awayStartTime || idleSeconds !== undefined) {
 				// Prefer the monitor's measured idle duration over wall-clock deltas
-				const awaySecs = idleSeconds ?? (now - (this.awayStartTime ?? now)) / 1000;
+				const awaySecs = Math.max(
+					1,
+					Math.round(idleSeconds ?? (now - (this.awayStartTime ?? now)) / 1000)
+				);
 				const thresholdMinutes = settingsStore.settings.awayResetMin || 10;
 				if (awaySecs / 60 >= thresholdMinutes) {
-					// User was away for >= awayResetMin (default 10 min), reset timers on return
 					this.resetTimersInternal(now);
 				} else {
 					this.resumeTimers(now);
 				}
+
+				// One away-session event per session, recorded on return with
+				// the measured duration.
+				void settingsStore.recordBreak({
+					type: 'away',
+					action: 'completed',
+					durationSec: awaySecs,
+					timestamp: now
+				});
 			} else {
 				this.resumeTimers(now);
 			}
@@ -420,22 +405,43 @@ class TimerManager {
 			return;
 		}
 
-		if (settingsStore.settings.eyeEnabled) {
-			this.eyeTargetTimestamp = now + this.eyeTimeRemaining * 1000;
-		} else {
-			this.eyeTargetTimestamp = null;
-		}
+		this.eyeTargetTimestamp = settingsStore.settings.eyeEnabled
+			? now + this.eyeTimeRemaining * 1000
+			: null;
+		this.stretchTargetTimestamp = settingsStore.settings.stretchEnabled
+			? now + this.stretchTimeRemaining * 1000
+			: null;
+	}
 
-		if (settingsStore.settings.stretchEnabled) {
-			this.stretchTargetTimestamp = now + this.stretchTimeRemaining * 1000;
-		} else {
-			this.stretchTargetTimestamp = null;
-		}
+	/** Guided break duration in seconds for a break type. */
+	durationFor(type: BreakType): number {
+		return type === 'eye'
+			? settingsStore.settings.eyeDurationSec || DEFAULT_SETTINGS.eyeDurationSec
+			: settingsStore.settings.stretchDurationSec || DEFAULT_SETTINGS.stretchDurationSec;
+	}
+
+	/** Reminder interval in seconds for a break type. */
+	intervalSecFor(type: BreakType): number {
+		return (
+			(type === 'eye'
+				? settingsStore.settings.eyeIntervalMin || DEFAULT_SETTINGS.eyeIntervalMin
+				: settingsStore.settings.stretchIntervalMin || DEFAULT_SETTINGS.stretchIntervalMin) * 60
+		);
+	}
+
+	/** HUD scale multiplier: 1 = normal, 2 = "2× Size" menu mode. */
+	get hudScale(): 1 | 2 {
+		return settingsStore.settings.hud2x ? 2 : 1;
+	}
+
+	/** Compact idle HUD size at the current scale. */
+	get idleHudSize(): { width: number; height: number } {
+		return { width: IDLE_HUD_WIDTH * this.hudScale, height: IDLE_HUD_HEIGHT * this.hudScale };
 	}
 
 	private resetTimersInternal(now: number = Date.now()) {
-		this.eyeTimeRemaining = (settingsStore.settings.eyeIntervalMin || 20) * 60;
-		this.stretchTimeRemaining = (settingsStore.settings.stretchIntervalMin || 45) * 60;
+		this.eyeTimeRemaining = this.intervalSecFor('eye');
+		this.stretchTimeRemaining = this.intervalSecFor('stretch');
 		this.activeBreak = null;
 		this.breakTimeRemaining = 0;
 		this.breakTargetTimestamp = null;
@@ -455,7 +461,7 @@ class TimerManager {
 
 	resetTimers() {
 		if (!this.isMaster) {
-			emitTauriEvent('breaktime:command', { action: 'reset-timers' });
+			emitTauriEvent(EV_COMMAND, { action: 'reset-timers' });
 			return;
 		}
 
@@ -463,9 +469,21 @@ class TimerManager {
 		this.emitStateSync();
 	}
 
+	/** Restart a single reminder countdown to its full interval. */
+	resetTimer(type: BreakType) {
+		if (type !== 'eye' && type !== 'stretch') return;
+		if (!this.isMaster) {
+			emitTauriEvent(EV_COMMAND, { action: 'reset-timer', type });
+			return;
+		}
+
+		this.rearmTimerFor(type, Date.now());
+		this.emitStateSync();
+	}
+
 	togglePause() {
 		if (!this.isMaster) {
-			emitTauriEvent('breaktime:command', { action: 'toggle-pause' });
+			emitTauriEvent(EV_COMMAND, { action: 'toggle-pause' });
 			return;
 		}
 
@@ -481,59 +499,57 @@ class TimerManager {
 		this.emitStateSync();
 	}
 
+	/**
+	 * Claims the active break synchronously (clearing it before any await) so
+	 * a double-click or a tick racing a slow stats write cannot double-record.
+	 */
+	private claimActiveBreak(): BreakType | null {
+		const type = this.activeBreak;
+		if (!type || type === 'away') return null;
+		this.activeBreak = null;
+		this.breakTargetTimestamp = null;
+		this.breakTimeRemaining = 0;
+		return type;
+	}
+
 	async triggerBreak(type: BreakType) {
 		if (!this.isMaster) {
-			await emitTauriEvent('breaktime:command', { action: 'trigger-break', type });
+			await emitTauriEvent(EV_COMMAND, { action: 'trigger-break', type });
 			return;
 		}
+		if (type === 'away') return;
 
-		// If another break is active, record it as expired before replacing it
-		// (e.g. tray "Take Eye Break Now" during an active stretch break).
-		if (this.activeBreak && this.activeBreak !== type) {
-			const interrupted = this.activeBreak;
-			const interruptedDuration =
-				interrupted === 'eye'
-					? settingsStore.settings.eyeDurationSec || 20
-					: settingsStore.settings.stretchDurationSec || 60;
+		// If another break is active, record it as expired before replacing it.
+		const interrupted = this.claimActiveBreak();
+		if (interrupted && interrupted !== type) {
 			await settingsStore.recordBreak({
 				type: interrupted,
 				action: 'expired',
-				durationSec: interruptedDuration
+				durationSec: this.durationFor(interrupted)
 			});
 			this.rearmTimerFor(interrupted, Date.now());
 		}
 
-		this.activeBreak = type;
-
-		const duration =
-			type === 'eye'
-				? settingsStore.settings.eyeDurationSec || 20
-				: settingsStore.settings.stretchDurationSec || 60;
+		// Make sure the overlay is visible even if we're in settings mode —
+		// natural timer breaks must not fire in a hidden window.
+		await enterOverlayMode();
 
 		const now = Date.now();
-		this.breakTimeRemaining = duration;
-		this.breakTargetTimestamp = now + duration * 1000;
-		this.blinkCount = 1;
-		this.currentExerciseIndex = 0;
+		this.activeBreak = type;
+		this.breakTimeRemaining = this.durationFor(type);
+		this.breakTargetTimestamp = now + this.breakTimeRemaining * 1000;
 
-		// Freeze non-active countdowns while break is underway
-		if (this.eyeTargetTimestamp) {
-			this.eyeTimeRemaining = Math.max(0, Math.ceil((this.eyeTargetTimestamp - now) / 1000));
-			this.eyeTargetTimestamp = null;
-		}
-		if (this.stretchTargetTimestamp) {
-			this.stretchTimeRemaining = Math.max(0, Math.ceil((this.stretchTargetTimestamp - now) / 1000));
-			this.stretchTargetTimestamp = null;
-		}
+		// Freeze reminder countdowns while the break is underway
+		this.freezeTimers(now);
 
-		// Expand overlay window smoothly
-		if (type === 'eye') {
-			await setOverlayWindowSize(EYE_HUD_WIDTH, EYE_HUD_HEIGHT);
-		} else {
-			await setOverlayWindowSize(STRETCH_HUD_WIDTH, STRETCH_HUD_HEIGHT);
-		}
+		// Size the overlay for the break card (scales with 2× HUD mode)
+		const k = this.hudScale;
+		await setOverlayWindowSize(
+			(type === 'eye' ? EYE_HUD_WIDTH : STRETCH_HUD_WIDTH) * k,
+			(type === 'eye' ? EYE_HUD_HEIGHT : STRETCH_HUD_HEIGHT) * k
+		);
 
-		// Play alert sound once from authoritative master
+		// Play the start-of-break chime (once, from the authoritative master)
 		playSound(
 			settingsStore.settings.soundPreset,
 			settingsStore.settings.soundVolume,
@@ -546,21 +562,17 @@ class TimerManager {
 
 	async completeBreak() {
 		if (!this.isMaster) {
-			await emitTauriEvent('breaktime:command', { action: 'complete-break' });
+			await emitTauriEvent(EV_COMMAND, { action: 'complete-break' });
 			return;
 		}
 
-		if (!this.activeBreak) return;
-		const type = this.activeBreak;
-		const duration =
-			type === 'eye'
-				? settingsStore.settings.eyeDurationSec || 20
-				: settingsStore.settings.stretchDurationSec || 60;
+		const type = this.claimActiveBreak();
+		if (!type) return;
 
 		await settingsStore.recordBreak({
 			type,
 			action: 'completed',
-			durationSec: duration
+			durationSec: this.durationFor(type)
 		});
 
 		await this.finishActiveBreak(type, 'completed');
@@ -568,21 +580,17 @@ class TimerManager {
 
 	async skipBreak() {
 		if (!this.isMaster) {
-			await emitTauriEvent('breaktime:command', { action: 'skip-break' });
+			await emitTauriEvent(EV_COMMAND, { action: 'skip-break' });
 			return;
 		}
 
-		if (!this.activeBreak) return;
-		const type = this.activeBreak;
-		const duration =
-			type === 'eye'
-				? settingsStore.settings.eyeDurationSec || 20
-				: settingsStore.settings.stretchDurationSec || 60;
+		const type = this.claimActiveBreak();
+		if (!type) return;
 
 		await settingsStore.recordBreak({
 			type,
 			action: 'skipped',
-			durationSec: duration
+			durationSec: this.durationFor(type)
 		});
 
 		await this.finishActiveBreak(type, 'skipped');
@@ -595,48 +603,44 @@ class TimerManager {
 	async expireBreak() {
 		if (!this.isMaster) return;
 
-		if (!this.activeBreak) return;
-		const type = this.activeBreak;
-		const duration =
-			type === 'eye'
-				? settingsStore.settings.eyeDurationSec || 20
-				: settingsStore.settings.stretchDurationSec || 60;
+		const type = this.claimActiveBreak();
+		if (!type) return;
 
 		await settingsStore.recordBreak({
 			type,
 			action: 'expired',
-			durationSec: duration
+			durationSec: this.durationFor(type)
 		});
 
 		await this.finishActiveBreak(type, 'expired');
 	}
 
-	/** Reset one reminder countdown to its full interval (shared by finish/expire paths). */
+	/** Reset one reminder countdown to its full interval. */
 	private rearmTimerFor(type: BreakType, now: number) {
 		if (type === 'eye') {
-			this.eyeTimeRemaining = (settingsStore.settings.eyeIntervalMin || 20) * 60;
+			this.eyeTimeRemaining = this.intervalSecFor('eye');
 			if (!this.isPaused && !this.isIdle && settingsStore.settings.eyeEnabled) {
 				this.eyeTargetTimestamp = now + this.eyeTimeRemaining * 1000;
 			}
 		} else {
-			this.stretchTimeRemaining = (settingsStore.settings.stretchIntervalMin || 45) * 60;
+			this.stretchTimeRemaining = this.intervalSecFor('stretch');
 			if (!this.isPaused && !this.isIdle && settingsStore.settings.stretchEnabled) {
 				this.stretchTargetTimestamp = now + this.stretchTimeRemaining * 1000;
 			}
 		}
 	}
 
-	private async finishActiveBreak(type: BreakType, _action: 'completed' | 'skipped' | 'expired') {
+	private async finishActiveBreak(type: BreakType, action: 'completed' | 'skipped' | 'expired') {
 		this.activeBreak = null;
 		this.breakTimeRemaining = 0;
 		this.breakTargetTimestamp = null;
 
 		const now = Date.now();
 
-		// Reset countdown for this completed/skipped/expired break type
+		// Reset countdown for this break type
 		this.rearmTimerFor(type, now);
 
-		// Resume the other timer if not paused or idle
+		// Resume the other reminder if not paused or idle
 		if (!this.isPaused && !this.isIdle) {
 			if (type === 'eye' && settingsStore.settings.stretchEnabled && !this.stretchTargetTimestamp) {
 				this.stretchTargetTimestamp = now + this.stretchTimeRemaining * 1000;
@@ -645,16 +649,21 @@ class TimerManager {
 			}
 		}
 
-		// Shrink HUD back to compact idle size (user's custom size if set)
-		await setOverlayWindowSize(this.idleHudSize.width, this.idleHudSize.height);
+		// End-of-break sound: same phrase as the start chime with a triumphant
+		// flourish — played when the routine actually ran (not on skip).
+		if (action !== 'skipped') {
+			playBreakEnd(
+				settingsStore.settings.soundPreset,
+				settingsStore.settings.soundVolume,
+				settingsStore.settings.soundFadeIn
+			);
+		}
+
+		// Shrink HUD back to compact idle size at the current scale
+		const idle = this.idleHudSize;
+		await setOverlayWindowSize(idle.width, idle.height);
 
 		this.emitStateSync();
-	}
-
-	/** Persist a custom compact HUD size captured from the resize grip. */
-	async setIdleHudSize(width: number, height: number) {
-		this.idleHudSize = { width, height };
-		await settingsStore.updateSettings({ hudSize: { width, height } });
 	}
 
 	private tick() {
@@ -668,7 +677,7 @@ class TimerManager {
 
 		const awayResetMs = (settingsStore.settings.awayResetMin || 10) * 60 * 1000;
 		if (elapsedSinceLastTick >= awayResetMs) {
-			// Computer was asleep or suspended for >= awayResetMin, reset upon return
+			// Computer was asleep or suspended for >= awayResetMin, reset on return
 			this.resetTimersInternal(now);
 			this.emitStateSync();
 			return;
@@ -680,23 +689,10 @@ class TimerManager {
 				this.breakTargetTimestamp = now + this.breakTimeRemaining * 1000;
 			}
 
-			const diffMs = this.breakTargetTimestamp - now;
-			this.breakTimeRemaining = Math.max(0, Math.ceil(diffMs / 1000));
-
-			const totalDuration =
-				this.activeBreak === 'eye'
-					? settingsStore.settings.eyeDurationSec || 20
-					: settingsStore.settings.stretchDurationSec || 60;
-
-			const elapsed = Math.max(0, totalDuration - this.breakTimeRemaining);
-
-			if (this.activeBreak === 'eye') {
-				// 10 counted blinks over duration (default 20s = 1 blink every 2s)
-				this.blinkCount = blinkCountFor(elapsed, totalDuration);
-			} else {
-				// 4 rotating stretch exercises (every quarter of duration)
-				this.currentExerciseIndex = exerciseIndexFor(elapsed, totalDuration);
-			}
+			this.breakTimeRemaining = Math.max(
+				0,
+				Math.ceil((this.breakTargetTimestamp - now) / 1000)
+			);
 
 			if (this.breakTimeRemaining <= 0) {
 				void this.expireBreak();
@@ -718,11 +714,10 @@ class TimerManager {
 			if (!this.eyeTargetTimestamp) {
 				this.eyeTargetTimestamp = now + this.eyeTimeRemaining * 1000;
 			}
-			const diffMs = this.eyeTargetTimestamp - now;
-			this.eyeTimeRemaining = Math.max(0, Math.ceil(diffMs / 1000));
+			this.eyeTimeRemaining = Math.max(0, Math.ceil((this.eyeTargetTimestamp - now) / 1000));
 
 			if (this.eyeTimeRemaining <= 0) {
-				this.triggerBreak('eye');
+				void this.triggerBreak('eye');
 				return;
 			}
 		} else {
@@ -734,11 +729,13 @@ class TimerManager {
 			if (!this.stretchTargetTimestamp) {
 				this.stretchTargetTimestamp = now + this.stretchTimeRemaining * 1000;
 			}
-			const diffMs = this.stretchTargetTimestamp - now;
-			this.stretchTimeRemaining = Math.max(0, Math.ceil(diffMs / 1000));
+			this.stretchTimeRemaining = Math.max(
+				0,
+				Math.ceil((this.stretchTargetTimestamp - now) / 1000)
+			);
 
 			if (this.stretchTimeRemaining <= 0) {
-				this.triggerBreak('stretch');
+				void this.triggerBreak('stretch');
 				return;
 			}
 		} else {
@@ -748,18 +745,15 @@ class TimerManager {
 		this.emitStateSync();
 	}
 
-	formatTimeShort(seconds: number): string {
-		if (seconds >= 60) {
-			const mins = Math.ceil(seconds / 60);
-			return `${mins}m`;
-		}
-		return `${seconds}s`;
-	}
-
 	destroy() {
+		this.generation++;
 		if (this.timerInterval) {
 			clearInterval(this.timerInterval);
 			this.timerInterval = null;
+		}
+		if (this.electionTimeout) {
+			clearTimeout(this.electionTimeout);
+			this.electionTimeout = null;
 		}
 		for (const unlisten of this.unlistenFns) {
 			try {
