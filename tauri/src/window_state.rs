@@ -4,9 +4,13 @@ use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
 /// Compact HUD size in logical points. Must stay in sync with
-/// IDLE_HUD_WIDTH / IDLE_HUD_HEIGHT in app/src/lib/types.ts.
+/// IDLE_HUD_WIDTH / IDLE_HUD_HEIGHT in app/src/lib/services/timerManager.svelte.ts.
 pub const IDLE_HUD_WIDTH: f64 = 104.0;
 pub const IDLE_HUD_HEIGHT: f64 = 48.0;
+/// Idle HUD size in 2× mode (hand-tuned tighter than a straight 2×; must
+/// stay in sync with IDLE_HUD_2X_WIDTH / IDLE_HUD_2X_HEIGHT in timerManager).
+pub const IDLE_HUD_2X_WIDTH: f64 = 149.0;
+pub const IDLE_HUD_2X_HEIGHT: f64 = 69.0;
 
 /// Minimum time between window-state disk writes during drags/resizes.
 const PERSIST_THROTTLE: std::time::Duration = std::time::Duration::from_millis(500);
@@ -206,8 +210,11 @@ pub fn hud_scale<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> f64 {
 
 /// Logical idle HUD size at the persisted scale.
 pub fn idle_hud_logical_size<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (f64, f64) {
-    let k = hud_scale(app);
-    (IDLE_HUD_WIDTH * k, IDLE_HUD_HEIGHT * k)
+    if hud_scale(app) >= 2.0 {
+        (IDLE_HUD_2X_WIDTH, IDLE_HUD_2X_HEIGHT)
+    } else {
+        (IDLE_HUD_WIDTH, IDLE_HUD_HEIGHT)
+    }
 }
 
 #[cfg(target_os = "macos")]

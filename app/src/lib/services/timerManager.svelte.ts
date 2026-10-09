@@ -34,6 +34,13 @@ export const EYE_HUD_HEIGHT = 48;
 /** Overlay window size while a stretch break is active (larger figure). */
 export const STRETCH_HUD_WIDTH = 136;
 export const STRETCH_HUD_HEIGHT = 48;
+/**
+ * Idle HUD window size in 2× mode. The eye/figures still render at 2×
+ * scale; the window is hand-tuned tighter around them (not a straight
+ * 2× of 104×48) so the pill doesn't sprawl.
+ */
+export const IDLE_HUD_2X_WIDTH = 149;
+export const IDLE_HUD_2X_HEIGHT = 69;
 
 class TimerManager {
 	// Master identity: only the overlay window owns countdown state.
@@ -436,7 +443,9 @@ class TimerManager {
 
 	/** Compact idle HUD size at the current scale. */
 	get idleHudSize(): { width: number; height: number } {
-		return { width: IDLE_HUD_WIDTH * this.hudScale, height: IDLE_HUD_HEIGHT * this.hudScale };
+		return this.hudScale === 2
+			? { width: IDLE_HUD_2X_WIDTH, height: IDLE_HUD_2X_HEIGHT }
+			: { width: IDLE_HUD_WIDTH, height: IDLE_HUD_HEIGHT };
 	}
 
 	private resetTimersInternal(now: number = Date.now()) {

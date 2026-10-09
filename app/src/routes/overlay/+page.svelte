@@ -40,6 +40,10 @@
 		hudScale === 2 ? 'w-[96px] h-[63px]' : 'w-[48px] h-[32px]'
 	);
 	let timeClass = $derived(hudScale === 2 ? 'text-[13px]' : 'text-[9px]');
+	// At 2× the eye box has ~6px of empty space under the drawn bottom curve;
+	// pull the time up into it so it sits on the eye's base instead of
+	// stretching the window taller. (The stretch person's time stays put.)
+	let timeTuckClass = $derived(hudScale === 2 ? '-mt-2' : '-mt-0.5');
 	let personClass = $derived(hudScale === 2 ? 'w-[26px] h-[26px]' : 'w-[14px] h-[14px]');
 	let personTimeClass = $derived(hudScale === 2 ? 'text-[11px]' : 'text-[8px]');
 	let stretchFigClass = $derived(hudScale === 2 ? 'w-[62px] h-[62px]' : 'w-[34px] h-[34px]');
@@ -350,7 +354,7 @@
 				/>
 			{/if}
 			<span
-				class="-mt-0.5 {timeClass} font-mono font-semibold tracking-tight leading-none {timeDisplay.accent} drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] select-none"
+				class="{timeTuckClass} {timeClass} font-mono font-semibold tracking-tight leading-none {timeDisplay.accent} drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] select-none"
 				data-tauri-drag-region
 			>
 				{timeDisplay.text}
