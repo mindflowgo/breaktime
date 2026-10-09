@@ -13,8 +13,9 @@
   ],
   "permissions": [
     "core:default",
-    "idlemonitor:default",
-    "dialog:default",
-    "opener:default"
+    "core:event:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
+    "idlemonitor:default"
   ]
 }

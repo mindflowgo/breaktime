@@ -2,8 +2,35 @@ import type { AppWindowState } from '$lib/types';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
-export const IDLE_HUD_WIDTH = 300;
-export const IDLE_HUD_HEIGHT = 56;
+export const IDLE_HUD_WIDTH = 104;
+export const IDLE_HUD_HEIGHT = 48;
+
+let broadcastChannel: BroadcastChannel | null = null;
+if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+	try {
+		broadcastChannel = new BroadcastChannel('breaktime_ipc_bus');
+	} catch {}
+}
+
+export function isOverlayWindow(): boolean {
+	if (typeof window === 'undefined') return false;
+	const path = window.location.pathname;
+	if (path === '/overlay' || path.startsWith('/overlay') || path.includes('overlay')) {
+		return true;
+	}
+	try {
+		const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } })
+			.__TAURI_INTERNALS__;
+		if (internals?.metadata?.currentWindow?.label === 'overlay') {
+			return true;
+		}
+	} catch {}
+	return false;
+}
+
+export function isMasterWindow(): boolean {
+	return isOverlayWindow();
+}
 
 export function isTauriEnvironment(): boolean {
 	if (typeof window === 'undefined') return false;
@@ -21,13 +48,32 @@ export async function tauriInvoke<T>(command: string, args?: Record<string, unkn
 	}
 }
 
+/**
+ * Strict invoke: rejects on failure. Use when the caller needs to surface the
+ * error to the user (e.g. settings persistence).
+ */
+export async function tauriInvokeStrict<T>(
+	command: string,
+	args?: Record<string, unknown>
+): Promise<T> {
+	return await invoke<T>(command, args);
+}
+
 export async function emitTauriEvent(event: string, payload?: unknown): Promise<void> {
 	if (typeof window === 'undefined') return;
-	try {
-		await emit(event, payload);
-	} catch (err) {
-		console.warn(`[WindowManager] Tauri emit '${event}' failed:`, err);
-		window.dispatchEvent(new CustomEvent(event, { detail: payload }));
+	if (isTauriEnvironment()) {
+		try {
+			await emit(event, payload);
+			return;
+		} catch (err) {
+			console.warn(`[WindowManager] Tauri emit '${event}' failed:`, err);
+		}
+	}
+	window.dispatchEvent(new CustomEvent(event, { detail: payload }));
+	if (broadcastChannel) {
+		try {
+			broadcastChannel.postMessage({ event, payload });
+		} catch {}
 	}
 }
 
@@ -38,18 +84,29 @@ export async function listenTauriEvent<T = unknown>(
 	if (typeof window === 'undefined') return () => {};
 
 	let unlistenNative: UnlistenFn | null = null;
-	try {
-		unlistenNative = await listen<T>(event, (evt) => {
-			handler(evt.payload);
-		});
-	} catch (err) {
-		console.warn(`[WindowManager] Tauri listen '${event}' failed:`, err);
+	if (isTauriEnvironment()) {
+		try {
+			unlistenNative = await listen<T>(event, (evt) => {
+				handler(evt.payload);
+			});
+		} catch (err) {
+			console.warn(`[WindowManager] Tauri listen '${event}' failed:`, err);
+		}
 	}
 
 	const domHandler = (e: Event) => {
 		handler((e as CustomEvent<T>).detail);
 	};
 	window.addEventListener(event, domHandler);
+
+	const channelHandler = (e: MessageEvent) => {
+		if (e.data && e.data.event === event) {
+			handler(e.data.payload as T);
+		}
+	};
+	if (broadcastChannel) {
+		broadcastChannel.addEventListener('message', channelHandler);
+	}
 
 	return () => {
 		if (unlistenNative) {
@@ -58,6 +115,9 @@ export async function listenTauriEvent<T = unknown>(
 			} catch {}
 		}
 		window.removeEventListener(event, domHandler);
+		if (broadcastChannel) {
+			broadcastChannel.removeEventListener('message', channelHandler);
+		}
 	};
 }
 
@@ -75,17 +135,23 @@ export async function setOverlayWindowSize(width: number, height: number): Promi
 	await tauriInvoke('set_overlay_size', { width: safeW, height: safeH });
 }
 
-export async function getWindowState(): Promise<AppWindowState | null> {
-	return await tauriInvoke<AppWindowState>('get_window_state');
-}
-
-export async function saveWindowState(state: AppWindowState): Promise<void> {
-	await tauriInvoke('save_window_state', { state });
-}
-
 export async function exitApp(): Promise<void> {
 	await tauriInvoke('exit_app');
 	if (typeof window !== 'undefined') {
 		window.close();
 	}
 }
+
+/**
+ * Initiate native window drag on the overlay panel (matching llm_gauge)
+ */
+export async function startDragging(): Promise<void> {
+	const res = await tauriInvoke<boolean>('native_overlay_start_drag');
+	if (!res && isTauriEnvironment()) {
+		try {
+			const { getCurrentWindow } = await import('@tauri-apps/api/window');
+			await getCurrentWindow().startDragging();
+		} catch {}
+	}
+}
+

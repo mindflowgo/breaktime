@@ -2,66 +2,168 @@
 	import { onMount } from 'svelte';
 	import {
 		MoreVertical,
-		Check,
-		X,
-		Play,
-		Pause,
 		Settings,
-		Power,
+		BarChart3,
 		Eye,
 		Activity,
-		Sparkles,
-		Moon
+		Power,
+		Play,
+		Pause as PauseIcon,
+		Check
 	} from 'lucide-svelte';
 	import {
-		IDLE_HUD_WIDTH,
-		IDLE_HUD_HEIGHT,
 		exitOverlayMode,
 		setOverlayWindowSize,
-		exitApp
+		startDragging,
+		exitApp,
+		emitTauriEvent,
+		listenTauriEvent,
+		isTauriEnvironment
 	} from '$lib/services/windowManager';
-	import { timerManager, STRETCH_EXERCISES, EYE_INSTRUCTIONS } from '$lib/services/timerManager.svelte';
+	import { timerManager } from '$lib/services/timerManager.svelte';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
+	import { warmUpAudioContext } from '$lib/services/soundPlayer';
+	import { EV_OPEN_TAB } from '$lib/services/events';
+	import EyeTimerSvg from '$lib/components/EyeTimerSvg.svelte';
+	import StretchFigure from '$lib/components/StretchFigure.svelte';
 
-	let isHovered = $state(false);
 	let isMenuOpen = $state(false);
-	let priorHeight = $state<number | null>(null);
+	let isMouseOver = $state(false);
 
-	const MENU_EXPANDED_HEIGHT = 210;
+	const MENU_EXPANDED_WIDTH = 200;
+	const MENU_EXPANDED_HEIGHT = 330;
+
+	// 2× HUD mode: window, eye, figure and text all scale together.
+	let hudScale = $derived(settingsStore.settings.hud2x ? 2 : 1);
+	let idleSize = $derived(timerManager.idleHudSize);
+	let eyeClass = $derived(
+		hudScale === 2 ? 'w-[96px] h-[63px]' : 'w-[48px] h-[32px]'
+	);
+	let timeClass = $derived(hudScale === 2 ? 'text-[13px]' : 'text-[9px]');
+	let personClass = $derived(hudScale === 2 ? 'w-[26px] h-[26px]' : 'w-[14px] h-[14px]');
+	let personTimeClass = $derived(hudScale === 2 ? 'text-[11px]' : 'text-[8px]');
+	let stretchFigClass = $derived(hudScale === 2 ? 'w-[62px] h-[62px]' : 'w-[34px] h-[34px]');
+
+	async function resizeToIdle() {
+		await setOverlayWindowSize(idleSize.width, idleSize.height);
+	}
 
 	onMount(() => {
-		timerManager.init();
+		void (async () => {
+			await timerManager.init();
 
-		const handleClickOutside = (e: MouseEvent) => {
-			if (isMenuOpen) {
-				const target = e.target as HTMLElement;
-				if (!target.closest('.menu-container')) {
-					closeMenu();
+			// Ensure overlay starts at compact dimensions
+			if (!timerManager.activeBreak) {
+				await resizeToIdle();
+			}
+		})();
+
+		// Unlock WebAudio on the first user interaction
+		const unlockAudio = () => {
+			warmUpAudioContext();
+			window.removeEventListener('pointerdown', unlockAudio);
+		};
+		window.addEventListener('pointerdown', unlockAudio);
+
+		// Window dragging: drag anywhere except interactive controls
+		let dragStartPos: { x: number; y: number } | null = null;
+
+		const handlePointerDown = async (e: PointerEvent) => {
+			if (e.button !== 0) return;
+			const target = e.target as HTMLElement;
+			if (target.closest('button, .menu-container, .menu-dropdown')) {
+				return;
+			}
+			dragStartPos = { x: e.screenX, y: e.screenY };
+			await startDragging();
+		};
+
+		const handlePointerUp = (e: PointerEvent) => {
+			if (dragStartPos) {
+				const dist = Math.hypot(e.screenX - dragStartPos.x, e.screenY - dragStartPos.y);
+				dragStartPos = null;
+				// If user tapped/clicked without moving, perform the click action
+				if (dist < 5) {
+					handleCenterClick();
 				}
 			}
 		};
 
-		window.addEventListener('click', handleClickOutside);
-		return () => {
-			window.removeEventListener('click', handleClickOutside);
+		window.addEventListener('pointerdown', handlePointerDown);
+		window.addEventListener('pointerup', handlePointerUp);
+
+		const handleClickOutside = (e: MouseEvent) => {
+			if (isMenuOpen) {
+				const target = e.target as HTMLElement;
+				if (!target.closest('.menu-container') && !target.closest('.menu-dropdown')) {
+					void closeMenu();
+				}
+			}
 		};
+		window.addEventListener('click', handleClickOutside);
+
+		let unlistenFocus: (() => void) | null = null;
+		let unlistenExited: (() => void) | null = null;
+
+		void listenTauriEvent('overlay-exited', () => {
+			void closeMenu();
+		}).then((fn) => (unlistenExited = fn));
+
+		if (isTauriEnvironment()) {
+			void import('@tauri-apps/api/window')
+				.then(({ getCurrentWindow }) =>
+					getCurrentWindow()
+						.onFocusChanged(({ payload: focused }) => {
+							if (!focused) void closeMenu();
+						})
+						.then((fn) => {
+							unlistenFocus = fn;
+						})
+				)
+				.catch(() => {});
+		}
+
+		return () => {
+			window.removeEventListener('pointerdown', handlePointerDown);
+			window.removeEventListener('pointerup', handlePointerUp);
+			window.removeEventListener('click', handleClickOutside);
+			window.removeEventListener('pointerdown', unlockAudio);
+			if (unlistenFocus) unlistenFocus();
+			if (unlistenExited) unlistenExited();
+			timerManager.destroy();
+			settingsStore.destroy();
+		};
+	});
+
+	// Dismiss menu if a break begins
+	$effect(() => {
+		if (timerManager.activeBreak && isMenuOpen) {
+			void closeMenu();
+		}
+	});
+
+	// Overlay opacity: user default, 100% while hovered, 100% during breaks
+	let hudOpacity = $derived.by(() => {
+		if (isMouseOver || timerManager.activeBreak) return 1;
+		return settingsStore.settings.overlayOpacity ?? 0.85;
 	});
 
 	async function openMenu() {
 		isMenuOpen = true;
-		const currentH = window.innerHeight;
-		if (currentH < MENU_EXPANDED_HEIGHT) {
-			priorHeight = currentH;
-			await setOverlayWindowSize(Math.max(IDLE_HUD_WIDTH, window.innerWidth), MENU_EXPANDED_HEIGHT);
-		}
+		await setOverlayWindowSize(MENU_EXPANDED_WIDTH, MENU_EXPANDED_HEIGHT);
 	}
 
 	async function closeMenu() {
+		if (!isMenuOpen) return;
 		isMenuOpen = false;
-		if (priorHeight !== null) {
-			const restoreH = priorHeight;
-			priorHeight = null;
-			await setOverlayWindowSize(window.innerWidth, restoreH);
+		await resizeToIdle();
+	}
+
+	/** Toggle 2× HUD mode and resize immediately when idle. */
+	async function handleToggle2x() {
+		await settingsStore.updateSettings({ hud2x: !settingsStore.settings.hud2x });
+		if (!timerManager.activeBreak && !isMenuOpen) {
+			await resizeToIdle();
 		}
 	}
 
@@ -74,8 +176,28 @@
 		}
 	}
 
-	async function handleOpenSettings() {
+	/** Clicking the center figure: idle → start eye break; during a break → complete it. */
+	function handleCenterClick() {
+		if (timerManager.activeBreak) {
+			void timerManager.completeBreak();
+		} else {
+			void timerManager.triggerBreak('eye');
+		}
+	}
+
+	/** Clicking the small grey person while idle → start a stretch break. */
+	function handleStretchFigureClick() {
+		if (!timerManager.activeBreak) {
+			void timerManager.triggerBreak('stretch');
+		}
+	}
+
+	async function handleOpenSettings(tab: 'reminders' | 'sounds' | 'inactivity' | 'stats' = 'reminders') {
 		await closeMenu();
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem('breaktime_active_tab', tab);
+		}
+		await emitTauriEvent(EV_OPEN_TAB, tab);
 		await exitOverlayMode();
 	}
 
@@ -99,385 +221,298 @@
 		await exitApp();
 	}
 
-	// Resize handle
-	function handleResizePointerDown(e: PointerEvent) {
-		if (e.button !== 0) return;
-		e.stopPropagation();
-		e.preventDefault();
-
-		if (isMenuOpen) {
-			closeMenu();
-		}
-
-		const startX = e.screenX;
-		const startY = e.screenY;
-		const startWidth = window.innerWidth;
-		const startHeight = window.innerHeight;
-		let lastW = startWidth;
-		let lastH = startHeight;
-		let rafId: number | null = null;
-
-		const target = e.currentTarget as HTMLElement;
-		target.setPointerCapture(e.pointerId);
-
-		function onPointerMove(moveEvent: PointerEvent) {
-			const dx = moveEvent.screenX - startX;
-			const dy = moveEvent.screenY - startY;
-
-			const minW = timerManager.activeBreak ? 320 : IDLE_HUD_WIDTH;
-			const minH = timerManager.activeBreak ? 90 : IDLE_HUD_HEIGHT;
-			const newW = Math.max(minW, Math.min(600, Math.round(startWidth + dx)));
-			const newH = Math.max(minH, Math.min(400, Math.round(startHeight + dy)));
-			lastW = newW;
-			lastH = newH;
-
-			if (!rafId) {
-				rafId = requestAnimationFrame(() => {
-					rafId = null;
-					setOverlayWindowSize(lastW, lastH);
-				});
+	function handleGlobalKeyDown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			if (isMenuOpen) {
+				void closeMenu();
+			} else if (timerManager.activeBreak) {
+				void timerManager.skipBreak();
+			}
+		} else if (e.key === 'Enter') {
+			if (timerManager.activeBreak && !isMenuOpen) {
+				e.preventDefault();
+				void timerManager.completeBreak();
 			}
 		}
-
-		function onPointerUp(upEvent: PointerEvent) {
-			target.removeEventListener('pointermove', onPointerMove);
-			target.removeEventListener('pointerup', onPointerUp);
-			target.releasePointerCapture(upEvent.pointerId);
-			if (rafId) {
-				cancelAnimationFrame(rafId);
-				rafId = null;
-			}
-			setOverlayWindowSize(lastW, lastH);
-		}
-
-		target.addEventListener('pointermove', onPointerMove);
-		target.addEventListener('pointerup', onPointerUp);
 	}
 
-	// Active break helpers
-	let eyeProgressPercent = $derived.by(() => {
-		const total = settingsStore.settings.eyeDurationSec || 20;
+	function fmtTime(seconds: number): string {
+		if (seconds > 60) return `${Math.ceil(seconds / 60)}m`;
+		return `${Math.max(0, seconds)}s`;
+	}
+
+	// Break countdown ring progress: 1.0 (start) → 0.0 (end)
+	let breakProgress = $derived.by(() => {
+		if (!timerManager.activeBreak) return 0;
+		const total = timerManager.durationFor(timerManager.activeBreak);
 		if (total <= 0) return 0;
-		return Math.max(0, Math.min(100, (timerManager.breakTimeRemaining / total) * 100));
+		return Math.max(0, Math.min(1, timerManager.breakTimeRemaining / total));
 	});
 
-	let stretchProgressPercent = $derived.by(() => {
-		const total = settingsStore.settings.stretchDurationSec || 60;
-		if (total <= 0) return 0;
-		return Math.max(0, Math.min(100, (timerManager.breakTimeRemaining / total) * 100));
+	// Idle eyelid droop: fraction of the eye interval that has elapsed
+	let eyeDroop = $derived.by(() => {
+		if (timerManager.activeBreak || timerManager.isIdle || timerManager.isPaused) return 0;
+		if (!settingsStore.settings.eyeEnabled) return 0;
+		const interval = timerManager.intervalSecFor('eye');
+		if (interval <= 0) return 0;
+		return Math.max(0, Math.min(1, 1 - timerManager.eyeTimeRemaining / interval));
 	});
 
-	let currentExercise = $derived(
-		STRETCH_EXERCISES[timerManager.currentExerciseIndex] || STRETCH_EXERCISES[0]
-	);
+	// Left-side time: break countdown during breaks, else time to next eye break
+	let timeDisplay = $derived.by(() => {
+		if (timerManager.activeBreak) {
+			return {
+				text: `${timerManager.breakTimeRemaining}s`,
+				accent: timerManager.activeBreak === 'eye' ? 'text-emerald-300' : 'text-amber-300'
+			};
+		}
+		if (timerManager.isIdle) return { text: 'away', accent: 'text-indigo-300' };
+		if (timerManager.isPaused) return { text: 'paused', accent: 'text-zinc-400' };
+		if (settingsStore.settings.eyeEnabled) {
+			return { text: fmtTime(timerManager.eyeTimeRemaining), accent: 'text-emerald-300' };
+		}
+		if (settingsStore.settings.stretchEnabled) {
+			return { text: fmtTime(timerManager.stretchTimeRemaining), accent: 'text-amber-300' };
+		}
+		return { text: 'off', accent: 'text-zinc-500' };
+	});
+
+	// Right-side stretch time (idle only)
+	let stretchTimeDisplay = $derived.by(() => {
+		if (timerManager.activeBreak || !settingsStore.settings.stretchEnabled) return '';
+		if (timerManager.isIdle || timerManager.isPaused) return '–';
+		return fmtTime(timerManager.stretchTimeRemaining);
+	});
+
+	let centerTooltip = $derived.by(() => {
+		if (timerManager.activeBreak === 'stretch') {
+			return `Stretch break (${timerManager.breakTimeRemaining}s) — click to finish, Esc to skip`;
+		}
+		if (timerManager.activeBreak) {
+			return `Eye break (${timerManager.breakTimeRemaining}s) — click to finish, Esc to skip`;
+		}
+		if (timerManager.isIdle) return 'Away — drag to move';
+		if (timerManager.isPaused) return 'Paused — click eye to resume cycle';
+		return `Next eye break in ${timeDisplay.text} — click to start now, drag to move`;
+	});
 </script>
 
-<!-- Outer HUD Container -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<svelte:window onkeydown={handleGlobalKeyDown} />
+
+<!-- Transparent overlay: default opacity from settings, 100% on hover or
+     while a break is active (never miss a prompt because of translucency). -->
 <div
-	class="overlay-container relative w-full h-full flex flex-col justify-center p-2 box-border transition-all duration-200"
-	class:window-hovered={isHovered}
-	onmouseenter={() => (isHovered = true)}
-	onmouseleave={() => (isHovered = false)}
+	role="presentation"
+	class="overlay-container relative w-full h-full box-border select-none overflow-hidden"
+	style="opacity: {hudOpacity}; transition: opacity 0.2s ease-out;"
+	onpointerenter={() => (isMouseOver = true)}
+	onpointerleave={() => (isMouseOver = false)}
 	data-tauri-drag-region
 >
-	{#if timerManager.activeBreak === 'eye'}
-		<!-- Active Eye Break View -->
-		<div class="flex flex-col justify-between h-full w-full px-2 py-1" data-tauri-drag-region>
-			<!-- Top row: Header & Controls -->
-			<div class="flex items-center justify-between gap-2" data-tauri-drag-region>
-				<div class="flex items-center gap-2">
-					<div
-						class="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-center relative animate-pulse"
-					>
-						<Eye class="w-4 h-4" />
-					</div>
-					<div>
-						<div class="flex items-center gap-2">
-							<span class="text-xs font-semibold text-emerald-200 tracking-wide uppercase">
-								Eye Reset
-							</span>
-							<span
-								class="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-							>
-								Blink {timerManager.blinkCount}/10
-							</span>
-						</div>
-					</div>
-				</div>
-
-				<div class="flex items-center gap-1.5 no-drag">
-					<span class="text-xs font-mono font-semibold text-zinc-300 mr-1">
-						{timerManager.breakTimeRemaining}s
-					</span>
-					<button
-						type="button"
-						onclick={() => timerManager.completeBreak()}
-						class="w-6 h-6 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center justify-center transition-colors cursor-pointer"
-						title="Complete Eye Break"
-					>
-						<Check class="w-3.5 h-3.5" />
-					</button>
-					<button
-						type="button"
-						onclick={() => timerManager.skipBreak()}
-						class="w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 border border-white/10 flex items-center justify-center transition-colors cursor-pointer"
-						title="Skip Eye Break"
-					>
-						<X class="w-3.5 h-3.5" />
-					</button>
-				</div>
-			</div>
-
-			<!-- Middle row: Instructions -->
-			<div class="text-[11px] text-zinc-400 tracking-tight flex items-center gap-1.5 truncate mt-0.5">
-				<span class="text-emerald-400 font-medium">Tip:</span>
-				<span class="truncate">{EYE_INSTRUCTIONS[timerManager.blinkCount % EYE_INSTRUCTIONS.length]}</span>
-			</div>
-
-			<!-- Bottom row: Countdown Progress Bar -->
-			<div class="w-full h-1 bg-zinc-800/80 rounded-full overflow-hidden mt-1.5">
-				<div
-					class="h-full bg-emerald-400 rounded-full transition-all duration-1000 ease-linear"
-					style="width: {eyeProgressPercent}%"
-				></div>
-			</div>
-		</div>
-	{:else if timerManager.activeBreak === 'stretch'}
-		<!-- Active Stretch Break View -->
-		<div class="flex flex-col justify-between h-full w-full px-2 py-1.5" data-tauri-drag-region>
-			<!-- Top row: Header, Exercise step badges, & Controls -->
-			<div class="flex items-center justify-between gap-2" data-tauri-drag-region>
-				<div class="flex items-center gap-2">
-					<div
-						class="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center justify-center animate-pulse"
-					>
-						<Activity class="w-4 h-4" />
-					</div>
-					<div>
-						<span class="text-xs font-semibold text-amber-200 tracking-wide uppercase">
-							Move Break
-						</span>
-					</div>
-				</div>
-
-				<!-- Exercise 4-step progress dots -->
-				<div class="flex items-center gap-1">
-					{#each STRETCH_EXERCISES as _, idx}
-						<div
-							class="w-1.5 h-1.5 rounded-full transition-colors duration-300"
-							class:bg-amber-400={timerManager.currentExerciseIndex === idx}
-							class:bg-zinc-700={timerManager.currentExerciseIndex !== idx}
-						></div>
-					{/each}
-				</div>
-
-				<div class="flex items-center gap-1.5 no-drag">
-					<span class="text-xs font-mono font-semibold text-zinc-300 mr-1">
-						{timerManager.breakTimeRemaining}s
-					</span>
-					<button
-						type="button"
-						onclick={() => timerManager.completeBreak()}
-						class="w-6 h-6 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 flex items-center justify-center transition-colors cursor-pointer"
-						title="Complete Stretch Break"
-					>
-						<Check class="w-3.5 h-3.5" />
-					</button>
-					<button
-						type="button"
-						onclick={() => timerManager.skipBreak()}
-						class="w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 border border-white/10 flex items-center justify-center transition-colors cursor-pointer"
-						title="Skip Stretch Break"
-					>
-						<X class="w-3.5 h-3.5" />
-					</button>
-				</div>
-			</div>
-
-			<!-- Guided rotating exercise title & desc -->
-			<div class="flex flex-col mt-1 px-0.5">
-				<span class="text-xs font-medium text-zinc-200 tracking-tight">
-					{currentExercise.title}
-				</span>
-				<span class="text-[11px] text-zinc-400 tracking-tight truncate">
-					{currentExercise.desc}
-				</span>
-			</div>
-
-			<!-- Bottom row: Countdown Progress Bar -->
-			<div class="w-full h-1 bg-zinc-800/80 rounded-full overflow-hidden mt-1.5">
-				<div
-					class="h-full bg-amber-400 rounded-full transition-all duration-1000 ease-linear"
-					style="width: {stretchProgressPercent}%"
-				></div>
-			</div>
-		</div>
-	{:else}
-		<!-- Compact Idle HUD (300x56) -->
-		<div class="flex items-center justify-between w-full h-full px-2" data-tauri-drag-region>
-			<!-- Left: Breaktime brand / toggle -->
-			<button
-				type="button"
-				onclick={handleTogglePause}
-				class="no-drag flex items-center justify-center w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer group"
-				title={timerManager.isPaused ? 'Resume Timers' : 'Breaktime (Click to Pause)'}
-			>
-				{#if timerManager.isIdle}
-					<Moon class="w-4 h-4 text-indigo-400" />
-				{:else if timerManager.isPaused}
-					<Pause class="w-4 h-4 text-amber-400" />
-				{:else}
-					<Sparkles class="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
-				{/if}
-			</button>
-
-			<!-- Center: Countdown Pill -->
-			<div
-				class="flex items-center justify-center px-3 py-1 rounded-full bg-white/5 border border-white/10 shadow-sm text-xs font-mono font-medium tracking-tight text-zinc-200 select-none cursor-default"
+	<!-- HUD Row: [eye (time tucked under its curve) | person (stretch time below) / skip] -->
+	<div
+		class="hud-row flex items-center justify-between w-full h-full px-1.5 gap-1 box-border"
+		data-tauri-drag-region
+	>
+		<!-- Center: eye (idle + eye breaks) or the stretch figure; time sits
+		     directly below, just under the bottom curve of the eye. -->
+		<div
+			class="relative flex flex-col items-center justify-center flex-1 min-w-0 self-stretch py-0.5"
+			title={centerTooltip}
+			data-tauri-drag-region
+		>
+			{#if timerManager.activeBreak === 'stretch'}
+				<StretchFigure progress={breakProgress} class="{stretchFigClass} text-amber-300" />
+			{:else}
+				<EyeTimerSvg
+					progress={breakProgress}
+					droop={eyeDroop}
+					isBreakActive={timerManager.activeBreak === 'eye'}
+					isIdle={timerManager.isIdle}
+					class={eyeClass}
+				/>
+			{/if}
+			<span
+				class="-mt-0.5 {timeClass} font-mono font-semibold tracking-tight leading-none {timeDisplay.accent} drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] select-none"
 				data-tauri-drag-region
 			>
-				{#if timerManager.isIdle}
-					<span class="flex items-center gap-1.5 text-indigo-300">
-						<span class="inline-block animate-pulse">💤</span> Away
-					</span>
-				{:else if timerManager.isPaused}
-					<span class="flex items-center gap-1.5 text-amber-300">
-						<span>⏸</span> Paused
-					</span>
-				{:else}
-					<div class="flex items-center gap-2">
-						{#if settingsStore.settings.eyeEnabled}
-							<span class="flex items-center gap-1 text-emerald-300">
-								<span>👁️</span>
-								<span>{timerManager.formatTimeShort(timerManager.eyeTimeRemaining)}</span>
-							</span>
-						{/if}
-						{#if settingsStore.settings.eyeEnabled && settingsStore.settings.stretchEnabled}
-							<span class="text-zinc-600 font-sans">•</span>
-						{/if}
-						{#if settingsStore.settings.stretchEnabled}
-							<span class="flex items-center gap-1 text-amber-300">
-								<span>🧍</span>
-								<span>{timerManager.formatTimeShort(timerManager.stretchTimeRemaining)}</span>
-							</span>
-						{/if}
-					</div>
-				{/if}
-			</div>
+				{timeDisplay.text}
+			</span>
+		</div>
 
-			<!-- Right: Menu button ⋮ -->
-			<div class="relative menu-container no-drag">
+		<!-- Right: stretch person with its countdown below (idle); skip button
+		     (breaks); menu toggle always at the far right. -->
+		<div class="flex items-center gap-0.5 flex-shrink-0 no-drag self-stretch">
+			{#if timerManager.activeBreak}
+				<button
+					type="button"
+					onclick={() => timerManager.skipBreak()}
+					title="Skip break (Esc)"
+					class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-rose-300 hover:bg-rose-500/15 active:scale-95 transition-all cursor-pointer no-drag"
+				>
+					<span class="text-[13px] font-bold leading-none">✕</span>
+				</button>
+			{:else if settingsStore.settings.stretchEnabled}
+				<button
+					type="button"
+					onclick={handleStretchFigureClick}
+					title="Next stretch break in {stretchTimeDisplay} — click to start now"
+					class="flex flex-col items-center justify-center gap-0.5 px-0.5 h-full rounded-lg text-zinc-500 hover:text-amber-300 hover:bg-white/5 active:scale-95 transition-all cursor-pointer no-drag"
+				>
+					<!-- Subtle grey standing person -->
+					<svg
+						viewBox="0 0 24 24"
+						class={personClass}
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					>
+						<circle cx="12" cy="5" r="1" />
+						<path d="m9 20 3-6 3 6" />
+						<path d="m6 8 6 2 6-2" />
+						<path d="M12 10v4" />
+					</svg>
+					{#if stretchTimeDisplay}
+						<span class="{personTimeClass} font-mono font-medium leading-none">{stretchTimeDisplay}</span>
+					{/if}
+				</button>
+			{/if}
+
+			<div class="relative menu-container no-drag flex-shrink-0">
 				<button
 					type="button"
 					onclick={toggleMenu}
 					title="Menu"
-					class="flex items-center justify-center w-8 h-8 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+					class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
 				>
 					<MoreVertical class="w-4 h-4" />
 				</button>
-
-				<!-- Dropdown Menu -->
-				{#if isMenuOpen}
-					<div
-						class="menu-dropdown absolute right-0 top-full mt-1.5 w-48 rounded-xl border border-white/15 bg-zinc-950/95 backdrop-blur-md shadow-2xl p-1 z-50 flex flex-col gap-0.5"
-					>
-						<button
-							type="button"
-							onclick={handleOpenSettings}
-							class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-left"
-						>
-							<Settings class="w-3.5 h-3.5 text-indigo-400" />
-							<span>Settings & Stats</span>
-						</button>
-
-						<div class="border-t border-white/10 my-0.5"></div>
-
-						<button
-							type="button"
-							onclick={handleTriggerEye}
-							class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/15 rounded-lg transition-colors cursor-pointer text-left"
-						>
-							<Eye class="w-3.5 h-3.5 text-emerald-400" />
-							<span>Take Eye Break Now</span>
-						</button>
-
-						<button
-							type="button"
-							onclick={handleTriggerStretch}
-							class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-amber-300 hover:text-amber-100 hover:bg-amber-500/15 rounded-lg transition-colors cursor-pointer text-left"
-						>
-							<Activity class="w-3.5 h-3.5 text-amber-400" />
-							<span>Take Stretch Break Now</span>
-						</button>
-
-						<button
-							type="button"
-							onclick={handleTogglePause}
-							class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-left"
-						>
-							{#if timerManager.isPaused}
-								<Play class="w-3.5 h-3.5 text-emerald-400" />
-								<span>Resume Timers</span>
-							{:else}
-								<Pause class="w-3.5 h-3.5 text-amber-400" />
-								<span>Pause Timers</span>
-							{/if}
-						</button>
-
-						<div class="border-t border-white/10 my-0.5"></div>
-
-						<button
-							type="button"
-							onclick={handleQuit}
-							class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-lg transition-colors cursor-pointer text-left"
-						>
-							<Power class="w-3.5 h-3.5 text-rose-400" />
-							<span>Quit Breaktime</span>
-						</button>
-					</div>
-				{/if}
 			</div>
 		</div>
-	{/if}
-
-	<!-- Resize Grip Handle (bottom-right 6-dot grip) -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		onpointerdown={handleResizePointerDown}
-		class="resize-handle absolute bottom-1 right-1 p-0.5 text-zinc-500 hover:text-zinc-300 select-none pointer-events-auto cursor-nwse-resize transition-opacity"
-		class:opacity-100={isHovered}
-		class:opacity-0={!isHovered}
-		title="Drag to resize HUD"
-	>
-		<svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor">
-			<circle cx="20" cy="20" r="2" />
-			<circle cx="14" cy="20" r="2" />
-			<circle cx="20" cy="14" r="2" />
-			<circle cx="8" cy="20" r="2" />
-			<circle cx="14" cy="14" r="2" />
-			<circle cx="20" cy="8" r="2" />
-		</svg>
 	</div>
+
+	<!-- Floating Dropdown Menu -->
+	{#if isMenuOpen}
+		<div
+			class="menu-dropdown absolute right-1.5 top-[46px] w-[186px] rounded-2xl border border-white/15 bg-zinc-950/95 backdrop-blur-xl shadow-2xl p-1.5 z-50 flex flex-col gap-0.5 no-drag"
+		>
+			<button
+				type="button"
+				onclick={() => handleOpenSettings('reminders')}
+				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				<Settings class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+				<span class="font-medium">Settings</span>
+			</button>
+
+			<button
+				type="button"
+				onclick={() => handleOpenSettings('stats')}
+				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				<BarChart3 class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+				<span class="font-medium">Stats Tracker</span>
+			</button>
+
+			<div class="border-t border-white/10 my-0.5"></div>
+
+			<button
+				type="button"
+				onclick={handleTriggerEye}
+				class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				<div class="flex items-center gap-2 min-w-0">
+					<Eye class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+					<span class="font-medium truncate">Eye Break Now</span>
+				</div>
+				<span class="text-[10px] text-emerald-400/70 font-mono">{timerManager.durationFor('eye')}s</span>
+			</button>
+
+			<button
+				type="button"
+				onclick={handleTriggerStretch}
+				class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-amber-300 hover:text-amber-100 hover:bg-amber-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				<div class="flex items-center gap-2 min-w-0">
+					<Activity class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+					<span class="font-medium truncate">Stretch Now</span>
+				</div>
+				<span class="text-[10px] text-amber-400/70 font-mono">{timerManager.durationFor('stretch')}s</span>
+			</button>
+
+			<button
+				type="button"
+				onclick={handleTogglePause}
+				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				{#if timerManager.isPaused}
+					<Play class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+					<span class="font-medium">Resume Timers</span>
+				{:else}
+					<PauseIcon class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+					<span class="font-medium">Pause Timers</span>
+				{/if}
+			</button>
+
+			<button
+				type="button"
+				onclick={handleToggle2x}
+				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				title="Double the HUD size (window, eye and text)"
+			>
+				<span class="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center">
+					{#if settingsStore.settings.hud2x}
+						<Check class="w-3.5 h-3.5 text-sky-400" />
+					{/if}
+				</span>
+				<span class="font-medium">2× Size</span>
+			</button>
+
+			<div class="border-t border-white/10 my-0.5"></div>
+
+			<button
+				type="button"
+				onclick={handleQuit}
+				class="flex items-center gap-2.5 w-full px-2.5 py-2 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+			>
+				<Power class="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+				<span class="font-medium">Quit Breaktime</span>
+			</button>
+		</div>
+	{/if}
 </div>
 
 <style>
+	/* 100% transparent container matching llm_gauge borderless draggable window */
 	.overlay-container {
-		background: rgba(18, 18, 22, 0.88) !important;
-		backdrop-filter: blur(24px) !important;
-		-webkit-backdrop-filter: blur(24px) !important;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 16px;
-		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+		height: 100vh;
+		width: 100vw;
+		background: transparent !important;
+		backdrop-filter: none !important;
+		-webkit-backdrop-filter: none !important;
+		border: none !important;
+		overflow: hidden;
+		box-shadow: none !important;
+		-webkit-app-region: drag;
+		cursor: grab;
 	}
 
-	.overlay-container.window-hovered {
-		border: 1px solid rgba(255, 255, 255, 0.22);
-		box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+	.overlay-container:active {
+		cursor: grabbing;
 	}
 
-	.resize-handle {
+	.hud-row {
+		background: transparent !important;
+		-webkit-app-region: drag;
+	}
+
+	.no-drag,
+	.menu-container,
+	.menu-dropdown {
 		-webkit-app-region: no-drag;
+		cursor: default;
 	}
 
 	.menu-dropdown {
@@ -487,7 +522,7 @@
 	@keyframes menuFadeIn {
 		from {
 			opacity: 0;
-			transform: scale(0.96) translateY(-4px);
+			transform: scale(0.95) translateY(-3px);
 		}
 		to {
 			opacity: 1;

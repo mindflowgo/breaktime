@@ -30,26 +30,35 @@ body {
 	-webkit-user-select: none;
 }
 
-/* Allow text selection inside stats tables / debug info */
-.selectable-text {
-	user-select: text;
-	-webkit-user-select: text;
-}
-
-/* Tauri window drag regions */
-[data-tauri-drag-region] {
+/* Drag regions matching llm_gauge */
+body, .overlay-container, .overlay-root, [data-tauri-drag-region] {
 	-webkit-app-region: drag;
 	app-region: drag;
 }
 
+[data-tauri-drag-region] {
+	cursor: grab;
+}
+[data-tauri-drag-region]:active {
+	cursor: grabbing;
+}
+
+/* Interactive elements exempt from dragging */
+button,
+input,
+select,
+textarea,
+a,
+[role="tab"],
+.menu-dropdown,
+.no-drag,
 [data-tauri-drag-region] button,
 [data-tauri-drag-region] input,
 [data-tauri-drag-region] select,
+[data-tauri-drag-region] textarea,
 [data-tauri-drag-region] a,
-[data-tauri-drag-region] [role="button"],
-[data-tauri-drag-region] [role="tab"],
-[data-tauri-drag-region] .no-drag,
-.no-drag {
+[data-tauri-drag-region] .menu-dropdown,
+[data-tauri-drag-region] .no-drag {
 	-webkit-app-region: no-drag;
 	app-region: no-drag;
 }

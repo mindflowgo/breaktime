@@ -7,6 +7,7 @@
     "dev": "bun --cwd app dev",
     "build": "bun --cwd app build",
     "check": "bun --cwd app check",
+    "test": "bun --cwd app test",
     "tauri": "bun --cwd tauri dev",
     "tauri:dev": "bun --cwd app build && bun --cwd tauri dev",
     "tauri:build": "bun --cwd app build && bun --cwd tauri build"

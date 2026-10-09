@@ -52,6 +52,14 @@ export const SOUND_PRESETS: SoundPresetInfo[] = [
 	}
 ];
 
+/**
+ * Default compact HUD dimensions. Must stay in sync with IDLE_HUD_WIDTH /
+ * IDLE_HUD_HEIGHT in tauri/src/window_state.rs (Rust applies them at startup
+ * before the frontend runs).
+ */
+export const IDLE_HUD_WIDTH = 104;
+export const IDLE_HUD_HEIGHT = 48;
+
 export interface Settings {
 	eyeEnabled: boolean;
 	eyeIntervalMin: number;
@@ -62,8 +70,11 @@ export interface Settings {
 	soundPreset: SoundPreset;
 	soundVolume: number; // 0 to 1
 	soundFadeIn: boolean;
+	soundRepeat: number; // 1 to 5 phrase repetitions
 	idleThresholdSec: number; // default 300 (5 min)
 	awayResetMin: number; // default 10 min
+	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)
+	hud2x: boolean; // 2× HUD mode (double-size eye & window)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -76,12 +87,21 @@ export const DEFAULT_SETTINGS: Settings = {
 	soundPreset: 'gentle-chime',
 	soundVolume: 0.6,
 	soundFadeIn: true,
+	soundRepeat: 1,
 	idleThresholdSec: 300,
-	awayResetMin: 10
+	awayResetMin: 10,
+	overlayOpacity: 0.85,
+	hud2x: false
 };
 
-export type BreakType = 'eye' | 'stretch';
-export type BreakAction = 'completed' | 'skipped';
+export type BreakType = 'eye' | 'stretch' | 'away';
+
+/**
+ * 'completed': user clicked the checkmark (breaks) or returned from away.
+ * 'skipped': user clicked the X.
+ * 'expired': countdown reached zero without user action.
+ */
+export type BreakAction = 'completed' | 'skipped' | 'expired';
 
 export interface BreakEvent {
 	id: string;
@@ -94,22 +114,60 @@ export interface BreakEvent {
 export interface BreakStats {
 	totalCompleted: number;
 	totalSkipped: number;
+	totalExpired: number;
 	eyeCompleted: number;
 	eyeSkipped: number;
+	eyeExpired: number;
 	stretchCompleted: number;
 	stretchSkipped: number;
+	stretchExpired: number;
+	awayCount?: number;
+	totalAwaySec?: number;
 	events: BreakEvent[];
 }
 
 export const DEFAULT_STATS: BreakStats = {
 	totalCompleted: 0,
 	totalSkipped: 0,
+	totalExpired: 0,
 	eyeCompleted: 0,
 	eyeSkipped: 0,
+	eyeExpired: 0,
 	stretchCompleted: 0,
 	stretchSkipped: 0,
+	stretchExpired: 0,
+	awayCount: 0,
+	totalAwaySec: 0,
 	events: []
 };
+
+/** Command sent from a non-master window to the master (overlay) window. */
+export interface TimerCommand {
+	action:
+		| 'trigger-break'
+		| 'toggle-pause'
+		| 'complete-break'
+		| 'skip-break'
+		| 'reset-timers'
+		| 'reset-timer';
+	type?: BreakType;
+}
+
+/** Authoritative timer state broadcast from the master (overlay) window. */
+export interface TimerStateSync {
+	isPaused: boolean;
+	isIdle: boolean;
+	activeBreak: BreakType | null;
+	eyeTimeRemaining: number;
+	stretchTimeRemaining: number;
+	breakTimeRemaining: number;
+	awayStartTime: number | null;
+	eyeTargetTimestamp: number | null;
+	stretchTargetTimestamp: number | null;
+	breakTargetTimestamp: number | null;
+	/** Send time; mirrors drop payloads older than the last one seen. */
+	timestamp: number;
+}
 
 export interface WindowBounds {
 	width: number;
