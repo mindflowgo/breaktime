@@ -8,7 +8,7 @@ Every 20 minutes it triggers an 👁️ **Eye Reset** (default 20-second guided 
 
 A compact always-on-top pill (macOS `NSPanel` via `tauri-nspanel`), borderless and draggable anywhere (click-drag anywhere except buttons; a tap without drag counts as a click).
 
-**2× Size:** the ⋮ menu has a "2× Size" toggle (`settings.hud2x`). Normal mode is a 104×48 window; 2× mode doubles the window (208×96), the eye, the figures and the text together. Break-card windows scale the same way.
+**2× Size:** the ⋮ menu has a "2× Size" toggle (`settings.hud2x`). Normal mode is a 104×48 window; 2× mode doubles the window (208×96), the eye, the figures and the text together. Break-card windows scale the same way. Rust reads `settings.hud2x` at startup and on mode switches (`idle_hud_logical_size`) so the window is already at the right scale before the frontend loads, and `overlay-mode-changed` events let the HUD re-apply its idle size as a safety net.
 
 **Layout: `[eye (time under it) | person (stretch time under it) / skip]`**
 

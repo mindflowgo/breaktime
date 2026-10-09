@@ -80,9 +80,12 @@ pub fn run() {
                     let _ = main.hide();
                 }
                 if let Some(overlay) = overlay_win {
-                    state.minimalist.width = IDLE_HUD_WIDTH;
-                    state.minimalist.height = IDLE_HUD_HEIGHT;
-                    let _ = overlay.set_size(tauri::Size::Logical(tauri::LogicalSize::new(IDLE_HUD_WIDTH, IDLE_HUD_HEIGHT)));
+                    // Size for the persisted HUD scale (2× mode) so the
+                    // doubled eye isn't clipped before the frontend loads.
+                    let (idle_w, idle_h) = idle_hud_logical_size(app.handle());
+                    state.minimalist.width = idle_w;
+                    state.minimalist.height = idle_h;
+                    let _ = overlay.set_size(tauri::Size::Logical(tauri::LogicalSize::new(idle_w, idle_h)));
 
                     let (clamped_x, clamped_y) = clamp_overlay_position(app.handle(), state.minimalist.x, state.minimalist.y);
                     state.minimalist.x = Some(clamped_x);

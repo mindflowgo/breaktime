@@ -23,7 +23,7 @@
 	import { timerManager } from '$lib/services/timerManager.svelte';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import { warmUpAudioContext } from '$lib/services/soundPlayer';
-	import { EV_OPEN_TAB } from '$lib/services/events';
+	import { EV_OPEN_TAB, EV_OVERLAY_MODE_CHANGED } from '$lib/services/events';
 	import EyeTimerSvg from '$lib/components/EyeTimerSvg.svelte';
 	import StretchFigure from '$lib/components/StretchFigure.svelte';
 
@@ -104,10 +104,20 @@
 
 		let unlistenFocus: (() => void) | null = null;
 		let unlistenExited: (() => void) | null = null;
+		let unlistenMode: (() => void) | null = null;
 
 		void listenTauriEvent('overlay-exited', () => {
 			void closeMenu();
 		}).then((fn) => (unlistenExited = fn));
+
+		// Returning to overlay mode (e.g. "Back to Overlay" from settings):
+		// re-apply the idle size — Rust sizes the window from its own settings
+		// read, this is the belt-and-braces frontend pass.
+		void listenTauriEvent<string>(EV_OVERLAY_MODE_CHANGED, (mode) => {
+			if (mode === 'minimalist' && !timerManager.activeBreak && !isMenuOpen) {
+				void resizeToIdle();
+			}
+		}).then((fn) => (unlistenMode = fn));
 
 		if (isTauriEnvironment()) {
 			void import('@tauri-apps/api/window')
@@ -130,6 +140,7 @@
 			window.removeEventListener('pointerdown', unlockAudio);
 			if (unlistenFocus) unlistenFocus();
 			if (unlistenExited) unlistenExited();
+			if (unlistenMode) unlistenMode();
 			timerManager.destroy();
 			settingsStore.destroy();
 		};
@@ -150,7 +161,11 @@
 
 	async function openMenu() {
 		isMenuOpen = true;
-		await setOverlayWindowSize(MENU_EXPANDED_WIDTH, MENU_EXPANDED_HEIGHT);
+		// Never shrink below the idle size when expanding for the menu.
+		await setOverlayWindowSize(
+			Math.max(MENU_EXPANDED_WIDTH, idleSize.width),
+			Math.max(MENU_EXPANDED_HEIGHT, idleSize.height)
+		);
 	}
 
 	async function closeMenu() {
@@ -159,10 +174,12 @@
 		await resizeToIdle();
 	}
 
-	/** Toggle 2× HUD mode and resize immediately when idle. */
+	/** Toggle 2× HUD mode — close the menu and resize immediately when idle. */
 	async function handleToggle2x() {
 		await settingsStore.updateSettings({ hud2x: !settingsStore.settings.hud2x });
-		if (!timerManager.activeBreak && !isMenuOpen) {
+		if (isMenuOpen) {
+			await closeMenu(); // closeMenu resizes to the new idle size
+		} else if (!timerManager.activeBreak) {
 			await resizeToIdle();
 		}
 	}

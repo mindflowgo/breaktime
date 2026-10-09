@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Compact HUD size in logical points. Must stay in sync with
 /// IDLE_HUD_WIDTH / IDLE_HUD_HEIGHT in app/src/lib/types.ts.
@@ -137,7 +137,8 @@ fn default_main_rect(monitors: &[MonitorInfo]) -> (i32, i32) {
 }
 
 /// Clamp an overlay window position (physical px). The HUD's physical size is
-/// derived from the scale of the monitor the HUD actually sits on.
+/// derived from the scale of the monitor the HUD actually sits on, times the
+/// persisted HUD scale (2× mode).
 pub fn clamp_overlay_position<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     x: Option<f64>,
@@ -145,8 +146,9 @@ pub fn clamp_overlay_position<R: tauri::Runtime>(
 ) -> (f64, f64) {
     let monitors = monitors_with_scale(app);
     let rects = rects_of(&monitors);
+    let k = hud_scale(app);
     if let (Some(x), Some(y)) = (x, y) {
-        let scale = scale_at_point(&monitors, x as i32, y as i32);
+        let scale = scale_at_point(&monitors, x as i32, y as i32) * k;
         let (w, h) = (
             (IDLE_HUD_WIDTH * scale) as i32,
             (IDLE_HUD_HEIGHT * scale) as i32,
@@ -186,6 +188,26 @@ pub fn get_config_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf 
         return app_dir.join(".breaktime_window.json");
     }
     PathBuf::from(".breaktime_window.json")
+}
+
+/// HUD scale from the persisted `settings.hud2x` flag (frontend "2× Size"
+/// menu toggle). Rust sizes the overlay window at startup / on mode switches
+/// and must match the scale the frontend renders at, or the doubled eye gets
+/// clipped by a 1× window.
+pub fn hud_scale<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> f64 {
+    let hud2x = crate::settings::get_setting_value(app, "settings")
+        .and_then(|v| v.get("hud2x").and_then(|f| f.as_bool()));
+    if hud2x == Some(true) {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+/// Logical idle HUD size at the persisted scale.
+pub fn idle_hud_logical_size<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (f64, f64) {
+    let k = hud_scale(app);
+    (IDLE_HUD_WIDTH * k, IDLE_HUD_HEIGHT * k)
 }
 
 #[cfg(target_os = "macos")]
@@ -380,6 +402,7 @@ pub fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, Strin
     if already_min {
         // Ensure the panel is visible, nothing else.
         let _ = crate::native::show_overlay_panel(&app);
+        let _ = app.emit("overlay-mode-changed", "minimalist");
         return Ok(snapshot);
     }
 
@@ -403,13 +426,14 @@ pub fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, Strin
 
     snapshot.mode = "minimalist".to_string();
 
-    // 2. Show overlay window at clamped minimalist position.
+    // 2. Show overlay window at clamped minimalist position, sized for the
+    //    persisted HUD scale (2× mode) so the doubled eye is never clipped.
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        snapshot.minimalist.width = IDLE_HUD_WIDTH;
-        snapshot.minimalist.height = IDLE_HUD_HEIGHT;
+        let (idle_w, idle_h) = idle_hud_logical_size(&app);
+        snapshot.minimalist.width = idle_w;
+        snapshot.minimalist.height = idle_h;
         let _ = overlay_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-            IDLE_HUD_WIDTH,
-            IDLE_HUD_HEIGHT,
+            idle_w, idle_h,
         )));
 
         let (clamped_x, clamped_y) =
@@ -428,6 +452,7 @@ pub fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, Strin
         let _ = crate::native::show_overlay_panel(&app);
     }
 
+    let _ = app.emit("overlay-mode-changed", "minimalist");
     Ok(commit_window_state(&app, snapshot))
 }
 
@@ -449,8 +474,9 @@ pub fn exit_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String
             snapshot.minimalist.x = Some(phys_pos.x as f64);
             snapshot.minimalist.y = Some(phys_pos.y as f64);
         }
-        snapshot.minimalist.width = IDLE_HUD_WIDTH;
-        snapshot.minimalist.height = IDLE_HUD_HEIGHT;
+        let (idle_w, idle_h) = idle_hud_logical_size(&app);
+        snapshot.minimalist.width = idle_w;
+        snapshot.minimalist.height = idle_h;
         let _ = crate::native::hide_overlay_panel(&app);
     }
 
@@ -477,6 +503,7 @@ pub fn exit_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String
         }
     }
 
+    let _ = app.emit("overlay-mode-changed", "normal");
     Ok(commit_window_state(&app, snapshot))
 }
 

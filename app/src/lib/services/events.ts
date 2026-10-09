@@ -26,3 +26,5 @@ export const EV_RESET_TIMERS = 'reset-timers';
 export const EV_RESET_TIMER = 'reset-timer';
 /** Rust: idlemonitor state change ({ idle, seconds? }). */
 export const EV_SYSTEM_IDLE = 'system:idle';
+/** Rust: window mode switched ("minimalist" | "normal"). */
+export const EV_OVERLAY_MODE_CHANGED = 'overlay-mode-changed';
