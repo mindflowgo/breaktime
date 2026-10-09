@@ -551,12 +551,9 @@ class TimerManager {
 		// Freeze reminder countdowns while the break is underway
 		this.freezeTimers(now);
 
-		// Size the overlay for the break card (scales with 2× HUD mode)
-		const k = this.hudScale;
-		await setOverlayWindowSize(
-			(type === 'eye' ? EYE_HUD_WIDTH : STRETCH_HUD_WIDTH) * k,
-			(type === 'eye' ? EYE_HUD_HEIGHT : STRETCH_HUD_HEIGHT) * k
-		);
+		// No window resize here: break UI renders inside the existing
+		// idle-sized window. Resizing the macOS panel mid-session produces
+		// a visible white outline flash on every break.
 
 		// Play the start-of-break chime (once, from the authoritative master)
 		playSound(
@@ -668,9 +665,8 @@ class TimerManager {
 			);
 		}
 
-		// Shrink HUD back to compact idle size at the current scale
-		const idle = this.idleHudSize;
-		await setOverlayWindowSize(idle.width, idle.height);
+		// No window resize here (see triggerBreak): the window stays at its
+		// idle size for the whole session.
 
 		this.emitStateSync();
 	}

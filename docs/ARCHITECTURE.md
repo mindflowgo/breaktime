@@ -18,9 +18,11 @@ A compact always-on-top pill (macOS `NSPanel` via `tauri-nspanel`), borderless a
 
 **Stretch breaks:** the eye is switched out for a **larger stretching figure** (`StretchFigure.svelte`) with the countdown ring around it; the break countdown time stays under the figure.
 
-**Transparency:** the HUD renders at `settings.overlayOpacity` (0.2–1.0, default 0.85, adjustable in Settings → Reminders → HUD Overlay). It switches to **100% opacity while the mouse is over it** and **during any break** — a prompt must never be missed because of translucency. (Native mouse-enter/exit tracking areas on macOS emit `overlay-entered`/`overlay-exited`.)
+**Transparency:** the HUD's default opacity is `settings.overlayOpacity` (0.2–1.0, default 0.85, adjustable in Settings → Reminders → HUD Overlay). It switches to **100% while the mouse is over it** (with a subtle llm_gauge-style outline of the overlay bounds), **during any break**, and **while the settings/stats window is open**. Opacity is applied natively via the panel's `setAlphaValue` (`native_overlay_set_opacity`, matching llm_gauge) — CSS opacity on a transparent NSPanel's webview proved unreliable on macOS — and hover state comes from the native tracking-area events `overlay-entered`/`overlay-exited`.
 
-Clicking the eye: idle → start an eye break; during a break → complete it. `Esc` skips, `Enter` completes. The ⋮ menu holds Settings, Stats Tracker, break-now actions (with live durations), Pause/Resume and Quit.
+**The eye and the person are drag regions only** — pressing them never starts, completes, or skips a break (so moving the HUD can never misfire). Breaks start exclusively from the timer firing or the ⋮ menu (Eye/Stretch Now); `Enter` completes the active break, `Esc` or the ✕ button skips it. The ⋮ menu holds Settings, Stats Tracker, break-now actions (with live durations), Pause/Resume, 2× Size and Quit.
+
+**No snap-to-size:** the overlay window keeps its idle size for the whole session — the break UI renders inside it. Resizing the macOS panel mid-session produced a white outline flash on every break; only the menu (and the 2× Size toggle) resize the window.
 
 ## Break lifecycle & sounds
 

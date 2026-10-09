@@ -156,6 +156,7 @@ pub fn run() {
             window_state::exit_overlay_mode,
             window_state::set_overlay_size,
             window_state::native_overlay_start_drag,
+            native::native_overlay_set_opacity,
             settings::get_setting,
             settings::set_setting,
         ])

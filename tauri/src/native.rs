@@ -141,6 +141,26 @@ pub fn show_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), S
     Ok(())
 }
 
+/// Adjust the overlay panel's alpha natively (0.0 transparent – 1.0 opaque),
+/// matching llm_gauge. CSS opacity on a transparent NSPanel's webview is
+/// unreliable (flickers / doesn't apply while compositing), but the panel's
+/// own alpha is rock solid.
+#[tauri::command]
+pub fn native_overlay_set_opacity(app: tauri::AppHandle, alpha: f64) -> Result<(), String> {
+    let clamped = alpha.clamp(0.0, 1.0);
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel("overlay") {
+            unsafe {
+                let _: () = tauri_nspanel::objc2::msg_send![panel.as_panel(), setAlphaValue: clamped];
+            }
+            return Ok(());
+        }
+    }
+    let _ = clamped;
+    Ok(())
+}
+
 pub fn hide_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

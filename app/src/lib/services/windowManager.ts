@@ -155,3 +155,12 @@ export async function startDragging(): Promise<void> {
 	}
 }
 
+/**
+ * Panel-level opacity via native setAlphaValue (0–1), matching llm_gauge.
+ * CSS opacity on a transparent NSPanel's webview is unreliable on macOS
+ * (flickers / drops while compositing); the panel's own alpha is solid.
+ */
+export async function setOverlayOpacity(alpha: number): Promise<void> {
+	await tauriInvoke('native_overlay_set_opacity', { alpha });
+}
+
