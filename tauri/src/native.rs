@@ -13,11 +13,48 @@ use tauri_nspanel::objc2_app_kit::{
 use tauri_nspanel::{ManagerExt as PanelManagerExt, WebviewWindowExt};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri::tray::TrayIconBuilder;
 
 const TRAY_ID: &str = "breaktime-tray";
+
+/// Handle to the tray's "2× HUD Size" checkbox so its check state can track
+/// changes made from the HUD dropdown (and vice versa).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub struct TrayState(pub std::sync::Mutex<Option<CheckMenuItem<tauri::Wry>>>);
+
+/// Flip `settings.hud2x` on disk and mirror it to the frontend through the
+/// same settings-changed envelope the webviews use (sender "rust").
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn flip_hud_2x<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<bool> {
+    use tauri::Emitter;
+
+    let mut v = crate::settings::get_setting_value(app, "settings")?;
+    let current = v.get("hud2x").and_then(|b| b.as_bool()).unwrap_or(false);
+    let next = !current;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("hud2x".to_string(), serde_json::json!(next));
+    }
+    crate::settings::set_setting_value(app, "settings".to_string(), v.clone()).ok()?;
+    let _ = app.emit(
+        "breaktime:settings-changed",
+        serde_json::json!({ "sender": "rust", "data": v }),
+    );
+    Some(next)
+}
+
+/// Keep the tray checkbox in sync with an externally supplied hud2x value.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn set_tray_hud_2x_checked<R: tauri::Runtime>(app: &tauri::AppHandle<R>, checked: bool) {
+    use tauri::Manager;
+    if let Some(item) = app
+        .try_state::<TrayState>()
+        .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()))
+    {
+        let _ = item.set_checked(checked);
+    }
+}
 
 #[cfg(target_os = "macos")]
 tauri_nspanel::tauri_panel! {
@@ -226,6 +263,13 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         let sep1 = PredefinedMenuItem::separator(app)?;
         let eye_now = MenuItemBuilder::with_id("eye-now", "👀 Take Eye Break Now").build(app)?;
         let stretch_now = MenuItemBuilder::with_id("stretch-now", "🧍 Take Stretch Break Now").build(app)?;
+        let initial_2x = crate::settings::get_setting_value(app.handle(), "settings")
+            .and_then(|v| v.get("hud2x").and_then(|b| b.as_bool()))
+            .unwrap_or(false);
+        let hud_2x = tauri::menu::CheckMenuItemBuilder::with_id("hud-2x", "2× HUD Size")
+            .checked(initial_2x)
+            .build(app)?;
+        app.manage(TrayState(std::sync::Mutex::new(Some(hud_2x.clone()))));
         // let sep2 = PredefinedMenuItem::separator(app)?;
         // let reset_eye = MenuItemBuilder::with_id("reset-eye", "👀 Reset Eye Timer").build(app)?;
         // let reset_stretch = MenuItemBuilder::with_id("reset-stretch", "🧍 Reset Stretch Timer").build(app)?;
@@ -240,6 +284,7 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 &sep1,
                 &eye_now,
                 &stretch_now,
+                &hud_2x,
                 // &sep2,
                 // &reset_eye,
                 // &reset_stretch,
@@ -289,6 +334,11 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             "stretch-now" => {
                 let _ = app.emit("trigger-break", "stretch");
             }
+            "hud-2x" => {
+                if let Some(next) = flip_hud_2x(app) {
+                    set_tray_hud_2x_checked(app, next);
+                }
+            }
             "reset-eye" => {
                 let _ = app.emit("reset-timer", "eye");
             }
@@ -312,5 +362,20 @@ pub fn setup_event_listeners(app: &tauri::App) {
     let app_handle = app.handle().clone();
     app.listen("trigger-break", move |_| {
         let _ = crate::window_state::enter_overlay_mode(app_handle.clone());
+    });
+
+    // The HUD dropdown can also toggle 2× mode — keep the tray checkbox honest.
+    let app_handle = app.handle().clone();
+    app.listen("breaktime:settings-changed", move |event| {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            data: serde_json::Value,
+        }
+        let Ok(env) = serde_json::from_str::<Envelope>(event.payload()) else {
+            return;
+        };
+        if let Some(hud2x) = env.data.get("hud2x").and_then(|b| b.as_bool()) {
+            set_tray_hud_2x_checked(&app_handle, hud2x);
+        }
     });
 }

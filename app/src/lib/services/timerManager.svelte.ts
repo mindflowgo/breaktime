@@ -655,14 +655,10 @@ class TimerManager {
 			}
 		}
 
-		// End-of-break sound: same phrase as the start chime with a triumphant
-		// flourish — played when the routine actually ran (not on skip).
+		// End-of-break cue: fixed gentle two-tone "tum-tuumm" (not a repeat of
+		// the start chime) — played when the routine actually ran (not skip).
 		if (action !== 'skipped') {
-			playBreakEnd(
-				settingsStore.settings.soundPreset,
-				settingsStore.settings.soundVolume,
-				settingsStore.settings.soundFadeIn
-			);
+			void playBreakEnd();
 		}
 
 		// No window resize here (see triggerBreak): the window stays at its

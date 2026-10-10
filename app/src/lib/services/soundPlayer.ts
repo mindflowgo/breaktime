@@ -353,28 +353,24 @@ function schedulePresetPhrase(
 }
 
 /**
- * Schedules the triumphant end-of-break flourish: a quick ascending major
- * arpeggio (C5 → E5 → G5 → C6) in bell timbre, resolving high and bright so
- * it is clearly distinguishable from the plain start-of-break phrase.
+ * Schedules the end-of-break completion cue: two gentle notes — a short low
+ * "tum" (A4) resolving up to a longer, warm "tuuumm" (E5). Deliberately
+ * nothing like the start chime: two tones only, so "time's up" reads at a
+ * glance of the ear.
  */
-function scheduleFlourish(ctx: AudioContext, master: GainNode, t0: number) {
-	const notes: Array<{ freq: number; peak: number; decay: number }> = [
-		{ freq: 523.25, peak: 0.38, decay: 0.8 }, // C5
-		{ freq: 659.25, peak: 0.42, decay: 0.9 }, // E5
-		{ freq: 783.99, peak: 0.46, decay: 1.0 }, // G5
-		{ freq: 1046.5, peak: 0.55, decay: 2.4 } // C6 — triumphant high bell
-	];
-
-	notes.forEach((note, i) => {
-		const t = t0 + i * 0.09;
-		playTone(ctx, master, note.freq, t, 0.012, note.decay, note.peak, 'sine', [
-			{ mult: 2.0, gain: 0.25, decayMult: 0.7 },
-			{ mult: 3.0, gain: 0.1, decayMult: 0.5 }
-		]);
-	});
-
-	// Warm undertone grounding the final chord
-	playTone(ctx, master, 261.63, t0 + 0.27, 0.02, 1.8, 0.22, 'triangle');
+function scheduleCompletionCue(ctx: AudioContext, master: GainNode, t0: number) {
+	// "tum" — short, grounded
+	playTone(ctx, master, 440.0, t0, 0.012, 0.32, 0.4, 'sine', [
+		{ mult: 2.0, gain: 0.18, decayMult: 0.6 }
+	]);
+	playTone(ctx, master, 220.0, t0, 0.02, 0.28, 0.18, 'triangle');
+	// "tuuumm" — higher, warmer, left ringing
+	const t1 = t0 + 0.22;
+	playTone(ctx, master, 659.25, t1, 0.014, 1.1, 0.45, 'sine', [
+		{ mult: 2.0, gain: 0.22, decayMult: 0.8 },
+		{ mult: 3.0, gain: 0.07, decayMult: 0.5 }
+	]);
+	playTone(ctx, master, 329.63, t1, 0.025, 0.9, 0.16, 'triangle');
 }
 
 /** Builds the shared master chain (gain + warm low-pass + fade envelope). */
@@ -456,36 +452,23 @@ export async function playSound(
 }
 
 /**
- * End-of-break sound: the same preset phrase the break started with, closing
- * with an ascending triumphant flourish so "break done" is instantly
- * recognizable against the start chime. Plays once (no repeat).
+ * End-of-break sound: a fixed gentle two-tone completion cue ("tum-tuumm",
+ * second tone higher) — deliberately NOT a repeat of the start chime, so the
+ * two moments are instantly distinguishable. Same volume as the chimes.
  */
-export async function playBreakEnd(
-	preset: SoundPreset,
-	volume: number = 0.6,
-	fadeIn: boolean = true
-): Promise<void> {
+export async function playBreakEnd(): Promise<void> {
 	if (typeof window === 'undefined') return;
 
 	stopSound();
 
-	// A custom sound marks the end by replaying — there is no synth flourish
-	// to layer over user-provided audio.
-	if (preset === 'custom') {
-		const { settingsStore } = await import('$lib/services/settingsStore.svelte');
-		await playCustomSound(settingsStore.settings.customSoundFile, volume, fadeIn, 1);
-		return;
-	}
+	const { settingsStore } = await import('$lib/services/settingsStore.svelte');
+	const volume = settingsStore.settings.soundVolume || 0.6;
 
 	const ctx = getAudioContext();
-	const { master, lowpass } = buildMasterChain(ctx, volume, fadeIn, preset);
+	const { master, lowpass } = buildMasterChain(ctx, volume, true, 'gentle-chime');
+	lowpass.frequency.setValueAtTime(2600, ctx.currentTime);
 
-	const now = ctx.currentTime;
-	const presetDuration = schedulePresetPhrase(ctx, master, lowpass, preset, now);
-
-	// Flourish lands on the tail of the phrase so it reads as one gesture.
-	lowpass.frequency.setValueAtTime(4200, now + presetDuration * 0.6);
-	scheduleFlourish(ctx, master, now + presetDuration * 0.8);
+	scheduleCompletionCue(ctx, master, ctx.currentTime);
 }
 
 export function previewSound(

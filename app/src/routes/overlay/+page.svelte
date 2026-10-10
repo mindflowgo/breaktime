@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
 		MoreVertical,
 		Settings,
@@ -210,15 +210,28 @@
 		await resizeToIdle();
 	}
 
-	/** Toggle 2× HUD mode — close the menu and resize immediately when idle. */
+	/** Toggle 2× HUD mode — close the menu; the watcher effect below resizes. */
 	async function handleToggle2x() {
 		await settingsStore.updateSettings({ hud2x: !settingsStore.settings.hud2x });
 		if (isMenuOpen) {
 			await closeMenu(); // closeMenu resizes to the new idle size
-		} else if (!timerManager.activeBreak) {
-			await resizeToIdle();
 		}
 	}
+
+	// The 2× toggle can come from this dropdown OR the tray menu (which flips
+	// settings and broadcasts); either way, re-apply the window size when idle.
+	// Scoped with untrack so menu/break transitions don't fight openMenu.
+	let prevHud2x = settingsStore.settings.hud2x;
+	$effect(() => {
+		const now2x = settingsStore.settings.hud2x;
+		untrack(() => {
+			const changed = now2x !== prevHud2x;
+			prevHud2x = now2x;
+			if (changed && !timerManager.activeBreak && !isMenuOpen) {
+				void resizeToIdle();
+			}
+		});
+	});
 
 	async function toggleMenu(e: MouseEvent) {
 		e.stopPropagation();

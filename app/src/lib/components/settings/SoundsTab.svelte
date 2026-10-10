@@ -238,8 +238,8 @@
 		</div>
 
 		<p class="text-[11px] text-zinc-500 italic pt-1 border-t border-white/5">
-			* Breaks end with the same chime plus an ascending flourish, so "break done" sounds
-			different from "break start". Skipped breaks play no end sound.
+			* Breaks end with a fixed gentle two-tone completion cue ("tum-tuumm") — distinct from
+			the start chime. Skipped breaks play no end sound.
 		</p>
 	</section>
 </div>
