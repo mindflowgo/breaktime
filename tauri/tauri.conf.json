@@ -5,7 +5,7 @@
   "identifier": "com.breaktime.app",
   "build": {
     "beforeDevCommand": "bun --cwd ../app dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5199",
     "beforeBuildCommand": "bun --cwd ../app build",
     "frontendDist": "../app/build"
   },
