@@ -1,5 +1,4 @@
 .zcode
-.env
 .svelte-kit
 app/build
 node_modules
