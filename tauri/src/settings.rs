@@ -2,28 +2,36 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-fn settings_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> PathBuf {
-    if let Ok(app_dir) = app.path().app_data_dir() {
-        return app_dir.join(".settings.json");
+/// Key → file routing: stats live in their own `stats.json`, everything
+/// else (settings, windowState) shares `.settings.json` through the same
+/// get/set handler.
+fn settings_file_path<R: tauri::Runtime>(app: &AppHandle<R>, key: &str) -> PathBuf {
+    let dir = app.path().app_data_dir().unwrap_or_default();
+    if key == "stats" {
+        dir.join("stats.json")
+    } else {
+        dir.join(".settings.json")
     }
-    PathBuf::from(".settings.json")
 }
 
 pub fn get_settings_raw<R: tauri::Runtime>(app: &AppHandle<R>) -> Value {
-    let path = settings_file_path(app);
+    read_json_file(&settings_file_path(app, "settings"))
+}
+
+pub fn get_setting_value<R: tauri::Runtime>(app: &AppHandle<R>, key: &str) -> Option<Value> {
+    let raw = read_json_file(&settings_file_path(app, key));
+    raw.get(key).cloned()
+}
+
+fn read_json_file(path: &std::path::Path) -> Value {
     if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(json) = serde_json::from_str(&content) {
                 return json;
             }
         }
     }
     serde_json::json!({})
-}
-
-pub fn get_setting_value<R: tauri::Runtime>(app: &AppHandle<R>, key: &str) -> Option<Value> {
-    let raw = get_settings_raw(app);
-    raw.get(key).cloned()
 }
 
 /// Atomic write: a crash mid-write must never truncate the target file, so
@@ -48,14 +56,18 @@ pub fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String>
     Ok(())
 }
 
-pub fn set_setting_value(app: &AppHandle, key: String, value: Value) -> Result<(), String> {
-    let path = settings_file_path(app);
+pub fn set_setting_value<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    key: String,
+    value: Value,
+) -> Result<(), String> {
+    let path = settings_file_path(app, &key);
 
-    let mut raw = get_settings_raw(app);
+    let mut raw = read_json_file(&path);
     if let Some(obj) = raw.as_object_mut() {
         obj.insert(key, value);
     } else {
-        raw = serde_json::json!({ key: value });
+        raw = serde_json::json!({ key.clone(): value });
     }
 
     if let Some(parent) = path.parent() {
@@ -70,7 +82,10 @@ pub fn set_setting_value(app: &AppHandle, key: String, value: Value) -> Result<(
 }
 
 #[tauri::command]
-pub fn get_setting(app: tauri::AppHandle, key: Option<String>) -> Result<serde_json::Value, String> {
+pub fn get_setting(
+    app: tauri::AppHandle,
+    key: Option<String>,
+) -> Result<serde_json::Value, String> {
     if let Some(k) = key {
         Ok(get_setting_value(&app, &k).unwrap_or(serde_json::Value::Null))
     } else {
@@ -79,7 +94,11 @@ pub fn get_setting(app: tauri::AppHandle, key: Option<String>) -> Result<serde_j
 }
 
 #[tauri::command]
-pub fn set_setting(app: tauri::AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
+pub fn set_setting(
+    app: tauri::AppHandle,
+    key: String,
+    value: serde_json::Value,
+) -> Result<(), String> {
     set_setting_value(&app, key, value)
 }
 
@@ -118,4 +137,3 @@ mod tests {
         assert!(atomic_write(&path, "{}").is_err());
     }
 }
-

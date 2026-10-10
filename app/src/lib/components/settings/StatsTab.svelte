@@ -9,6 +9,7 @@
 		XCircle
 	} from 'lucide-svelte';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
+	import type { Settings } from '$lib/types';
 
 	const pct = (completed: number, total: number): number =>
 		total <= 0 ? 100 : Math.round((completed / total) * 100);
@@ -173,21 +174,40 @@
 			<h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-400">
 				Recent Activity
 			</h2>
-			{#if settingsStore.stats.events.length > 0}
-				<button
-					type="button"
-					onclick={() => {
-						if (confirm('Clear all break statistics and activity logs?')) {
-							settingsStore.resetStats();
-						}
-					}}
-					class="flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
-					title="Clear all cumulative stats and history logs"
-				>
-					<RotateCcw class="w-3 h-3" />
-					<span>Reset Stats</span>
-				</button>
-			{/if}
+			<div class="flex items-center gap-3">
+				<!-- Retention window: older events are pruned from stats.json -->
+				<label class="flex items-center gap-1.5 text-[11px] text-zinc-400">
+					<span>Track back</span>
+					<select
+						value={settingsStore.settings.statsRetention}
+						onchange={(e) =>
+							settingsStore.updateSettings({
+								statsRetention: (e.target as HTMLSelectElement).value as Settings['statsRetention']
+							})}
+						class="bg-zinc-900 border border-white/10 rounded-lg px-1.5 py-1 text-[11px] text-zinc-200 cursor-pointer focus:outline-none focus:border-emerald-500/40"
+					>
+						<option value="1w">1 week</option>
+						<option value="1m">1 month</option>
+						<option value="6m">6 months</option>
+						<option value="forever">Forever</option>
+					</select>
+				</label>
+				{#if settingsStore.stats.events.length > 0}
+					<button
+						type="button"
+						onclick={() => {
+							if (confirm('Clear all break statistics and activity logs?')) {
+								settingsStore.resetStats();
+							}
+						}}
+						class="flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+						title="Clear all cumulative stats and history logs"
+					>
+						<RotateCcw class="w-3 h-3" />
+						<span>Reset Stats</span>
+					</button>
+				{/if}
+			</div>
 		</div>
 
 		{#if settingsStore.stats.events.length === 0}

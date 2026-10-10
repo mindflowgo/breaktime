@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
@@ -187,11 +186,12 @@ pub fn clamp_main_position<R: tauri::Runtime>(
     (dx as f64, dy as f64)
 }
 
-pub fn get_config_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
-    if let Ok(app_dir) = app.path().app_data_dir() {
-        return app_dir.join(".breaktime_window.json");
-    }
-    PathBuf::from(".breaktime_window.json")
+/// Load the persisted window state from `.settings.json` (key `windowState`,
+/// same get/set handler as settings and stats).
+pub fn load_window_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> AppWindowState {
+    crate::settings::get_setting_value(app, "windowState")
+        .and_then(|v| serde_json::from_value::<AppWindowState>(v).ok())
+        .unwrap_or_default()
 }
 
 /// HUD scale from the persisted `settings.hud2x` flag (frontend "2× Size"
@@ -374,14 +374,8 @@ fn persist_state_snapshot<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     state: &AppWindowState,
 ) -> Result<(), String> {
-    let path = get_config_path(app);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-    }
-    let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-    crate::settings::atomic_write(&path, &json)
+    let value = serde_json::to_value(state).map_err(|e| e.to_string())?;
+    crate::settings::set_setting_value(app, "windowState".to_string(), value)
 }
 
 #[tauri::command]

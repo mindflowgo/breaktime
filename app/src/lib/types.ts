@@ -75,7 +75,17 @@ export interface Settings {
 	awayResetMin: number; // default 10 min
 	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)
 	hud2x: boolean; // 2× HUD mode (double-size eye & window)
+	/** How far back to keep break statistics; older events are pruned. */
+	statsRetention: StatsRetention;
 }
+
+export type StatsRetention = '1w' | '1m' | '6m' | 'forever';
+
+export const STATS_RETENTION_MS: Record<Exclude<StatsRetention, 'forever'>, number> = {
+	'1w': 7 * 24 * 60 * 60 * 1000,
+	'1m': 30 * 24 * 60 * 60 * 1000,
+	'6m': 180 * 24 * 60 * 60 * 1000
+};
 
 export const DEFAULT_SETTINGS: Settings = {
 	eyeEnabled: true,
@@ -91,7 +101,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	idleThresholdSec: 300,
 	awayResetMin: 10,
 	overlayOpacity: 0.85,
-	hud2x: false
+	hud2x: false,
+	statsRetention: 'forever'
 };
 
 export type BreakType = 'eye' | 'stretch' | 'away';

@@ -59,8 +59,10 @@ JS ↔ JS: `breaktime:state-sync` (master → mirrors, timestamped; mirrors drop
 
 In the app data dir, all writes atomic (unique temp file + rename):
 
-- **`.settings.json`** — `{ "settings": Settings, "stats": BreakStats }`. Settings are normalized on load (`normalizeSettings`: clamps numbers, validates the sound preset — corrupt disk values can't leak NaN into countdowns). Stats keep the last 100 events.
-- **`.breaktime_window.json`** — `AppWindowState { mode, normal, minimalist }`. Positions are **physical pixels** (mixed-DPI safe; clamping via `clamp_rect` in physical space using the containing monitor's scale); sizes are logical points. State is cached in a managed `Mutex` (no guard held across window roundtrips — the macOS panel delegate fires synchronously inside `set_position`), persisted at most every 500 ms during drags and flushed on exit.
+- **`.settings.json`** — `{ "settings": Settings, "windowState": AppWindowState }`. Settings are normalized on load (`normalizeSettings`: clamps numbers, validates the sound preset — corrupt disk values can't leak NaN into countdowns). Includes `hud2x` (the persisted 2× HUD mode, which Rust also reads when sizing the window at startup) and `statsRetention`.
+- **`stats.json`** — `{ "stats": BreakStats }` under the `stats` key, through the same `get_setting`/`set_setting` handler (key `stats` routes here, all other keys route to `.settings.json`). Keep the last 100 events; the **stats retention window** (Stats tab dropdown: 1 week / 1 month / 6 months / forever, `settings.statsRetention`) prunes older events and recomputes all counters from the survivors, on load and whenever the window is shortened.
+
+**Window state** lives in `.settings.json` under the `windowState` key: `AppWindowState { mode, normal, minimalist }`. Positions are **physical pixels** (mixed-DPI safe; clamping via `clamp_rect` in physical space using the containing monitor's scale); sizes are logical points. State is cached in a managed `Mutex` (no guard held across window roundtrips — the macOS panel delegate fires synchronously inside `set_position`), persisted at most every 500 ms during drags and flushed on exit — via the same `set_setting_value` handler as settings and stats.
 
 Window modes: `minimalist` (HUD visible) ⇄ `normal` (settings window). Mode switches are idempotent — re-entering minimalist mode only ensures the panel is shown; it never resets the HUD size or position mid-break.
 
@@ -68,8 +70,9 @@ Window modes: `minimalist` (HUD visible) ⇄ `normal` (settings window). Mode sw
 
 - Frontend: SvelteKit 5 (static adapter, prerendered `/` and `/overlay`), Tailwind, vitest.
 - Backend: Tauri v2 (`tray-icon`, `image-png`, `devtools`), `tauri-plugin-idlemonitor = "0.2.3"`, `tauri-nspanel = "2.1.1"` (crates.io), no `window-vibrancy` (the HUD is fully transparent CSS over an NSPanel).
-- macOS: accessory activation policy (menu-bar app, no dock icon), template tray icon.
-- CI: `.github/workflows/ci.yml` — svelte-check, vitest, vite build, `cargo clippy -D warnings`, `cargo test`.
+- macOS: accessory activation policy (menu-bar app, no dock icon), template tray icon, NSPanel overlay (`tauri-nspanel`) with tracking-area hover events and `setAlphaValue` opacity.
+- Windows (x64): the overlay is a plain transparent always-on-top window (`transparent` + `alwaysOnTop` + `skipTaskbar` in `tauri.conf.json`) — no panel needed. Panel alpha is emulated with a `WS_EX_LAYERED` layered window + `SetLayeredWindowAttributes` (`windows` crate, `native_overlay_set_opacity`); hover comes from DOM pointer events (macOS-only unreliability motivated the native path there); dragging uses `start_dragging`, show/hide and always-on-top use the cross-platform Tauri APIs.
+- CI: `.github/workflows/ci.yml` — svelte-check, vitest, vite build, `cargo clippy -D warnings` + `cargo test` on macOS, and `cargo check` + `cargo test` on Windows (x64).
 
 Reference code from earlier projects lives in `/tauri-code`.
 

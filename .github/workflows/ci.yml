@@ -34,3 +34,17 @@ jobs:
           workspaces: tauri
       - run: cargo clippy -- -D warnings
       - run: cargo test
+
+  rust-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: tauri
+      - run: cargo check
+      - run: cargo test

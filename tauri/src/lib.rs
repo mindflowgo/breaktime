@@ -27,17 +27,7 @@ pub fn run() {
             let _ = native::setup_tray(app);
             native::setup_event_listeners(app);
 
-            let mut state = {
-                let path = get_config_path(app.handle());
-                if path.exists() {
-                    std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|c| serde_json::from_str::<AppWindowState>(&c).ok())
-                        .unwrap_or_default()
-                } else {
-                    AppWindowState::default()
-                }
-            };
+            let mut state = load_window_state(app.handle());
 
             let main_win = app.get_webview_window("main");
             let overlay_win = app.get_webview_window("overlay");
@@ -47,11 +37,11 @@ pub fn run() {
             // set_position during setup can fire it synchronously.
             manage_window_state(app, state.clone());
 
-            if let Some(ref overlay) = overlay_win {
+            if let Some(ref _overlay) = overlay_win {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = native::configure_overlay_panel(overlay);
-                    setup_macos_overlay_spaces(overlay);
+                    let _ = native::configure_overlay_panel(_overlay);
+                    setup_macos_overlay_spaces(_overlay);
                 }
             }
 

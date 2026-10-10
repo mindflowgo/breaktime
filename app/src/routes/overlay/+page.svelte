@@ -109,14 +109,28 @@
 		let unlistenEntered: (() => void) | null = null;
 		let unlistenExited: (() => void) | null = null;
 		let unlistenMode: (() => void) | null = null;
+		let teardownHover: (() => void) | null = null;
 
 		void listenTauriEvent('overlay-exited', () => {
 			isMouseOver = false;
 			void closeMenu();
 		}).then((fn) => (unlistenExited = fn));
 
-		// Hover state from the native tracking area (reliable for a
-		// transparent panel, unlike DOM pointerenter/leave).
+		// Hover state: on macOS the NSPanel tracking area emits reliable
+		// native events; on other platforms (Windows/Linux) the overlay is a
+		// regular window and DOM pointer events work fine there.
+		const isMac = navigator.userAgent.includes('Mac');
+		if (!isMac) {
+			const entered = () => (isMouseOver = true);
+			const left = () => (isMouseOver = false);
+			window.addEventListener('pointerenter', entered);
+			window.addEventListener('pointerleave', left);
+			teardownHover = () => {
+				window.removeEventListener('pointerenter', entered);
+				window.removeEventListener('pointerleave', left);
+			};
+		}
+
 		void listenTauriEvent('overlay-entered', () => {
 			isMouseOver = true;
 		}).then((fn) => (unlistenEntered = fn));
@@ -154,6 +168,7 @@
 			if (unlistenEntered) unlistenEntered();
 			if (unlistenExited) unlistenExited();
 			if (unlistenMode) unlistenMode();
+			if (teardownHover) teardownHover();
 			timerManager.destroy();
 			settingsStore.destroy();
 		};

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_EVENTS, nextStats, normalizeSettings, normalizeStats } from '$lib/services/breakLogic';
+import {
+	MAX_EVENTS,
+	nextStats,
+	normalizeSettings,
+	normalizeStats,
+	pruneStatsToRetention
+} from '$lib/services/breakLogic';
 import { DEFAULT_SETTINGS, DEFAULT_STATS, type BreakEvent, type BreakStats } from '$lib/types';
 
 function event(overrides: Partial<BreakEvent> = {}): BreakEvent {
@@ -115,5 +121,59 @@ describe('normalizeSettings', () => {
 		expect(s.eyeEnabled).toBe(false);
 		expect(s.eyeIntervalMin).toBe(10);
 		expect(s.overlayOpacity).toBe(DEFAULT_SETTINGS.overlayOpacity);
+	});
+
+	it('keeps statsRetention only when it is a known value', () => {
+		expect(normalizeSettings({ statsRetention: '1m' }).statsRetention).toBe('1m');
+		expect(normalizeSettings({ statsRetention: 'bogus' }).statsRetention).toBe('forever');
+		expect(normalizeSettings({}).statsRetention).toBe('forever');
+	});
+});
+
+describe('pruneStatsToRetention', () => {
+	const NOW = 1_800_000_000_000;
+	const day = 24 * 60 * 60 * 1000;
+
+	function statsWith(events: BreakEvent[]): BreakStats {
+		let stats = DEFAULT_STATS;
+		for (const e of events) stats = nextStats(stats, e);
+		return stats;
+	}
+
+	it('keeps everything for the forever window', () => {
+		const stats = statsWith([event({ timestamp: NOW - 400 * day })]);
+		expect(pruneStatsToRetention(stats, 'forever', NOW)).toBe(stats);
+	});
+
+	it('drops events older than the window and recomputes counters from survivors', () => {
+		const stats = statsWith([
+			event({ id: 'old', type: 'eye', action: 'completed', timestamp: NOW - 40 * day }),
+			event({ id: 'new', type: 'stretch', action: 'completed', timestamp: NOW - 2 * day })
+		]);
+		const pruned = pruneStatsToRetention(stats, '1m', NOW);
+		expect(pruned.events.map((e) => e.id)).toEqual(['new']);
+		expect(pruned.totalCompleted).toBe(1);
+		expect(pruned.stretchCompleted).toBe(1);
+		expect(pruned.eyeCompleted).toBe(0);
+	});
+
+	it('honors the 1-week window boundary', () => {
+		const stats = statsWith([
+			event({ id: 'edge', timestamp: NOW - 7 * day }),
+			event({ id: 'just-inside', timestamp: NOW - 7 * day + 1000 }),
+			event({ id: 'outside', timestamp: NOW - 8 * day })
+		]);
+		const pruned = pruneStatsToRetention(stats, '1w', NOW);
+		expect(pruned.events.map((e) => e.id)).toEqual(['just-inside', 'edge']);
+	});
+
+	it('recomputes away counters within the window', () => {
+		const stats = statsWith([
+			event({ id: 'a1', type: 'away', action: 'completed', durationSec: 300, timestamp: NOW - 200 * day }),
+			event({ id: 'a2', type: 'away', action: 'completed', durationSec: 60, timestamp: NOW - day })
+		]);
+		const pruned = pruneStatsToRetention(stats, '6m', NOW);
+		expect(pruned.awayCount).toBe(1);
+		expect(pruned.totalAwaySec).toBe(60);
 	});
 });

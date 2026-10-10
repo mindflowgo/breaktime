@@ -317,6 +317,7 @@ dependencies = [
  "tauri-build",
  "tauri-nspanel",
  "tauri-plugin-idlemonitor",
+ "windows",
 ]
 
 [[package]]

@@ -2,13 +2,38 @@ import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATS,
 	SOUND_PRESETS,
+	STATS_RETENTION_MS,
 	type BreakEvent,
 	type BreakStats,
-	type Settings
+	type Settings,
+	type StatsRetention
 } from '$lib/types';
 
 /** Max number of break history events kept on disk. */
 export const MAX_EVENTS = 100;
+
+/**
+ * Stats older than the selected retention are pruned and all counters are
+ * recomputed from the surviving events, so the stats file only ever
+ * describes the chosen window of time.
+ */
+export function pruneStatsToRetention(
+	stats: BreakStats,
+	retention: StatsRetention,
+	now: number = Date.now()
+): BreakStats {
+	if (retention === 'forever') return stats;
+	const cutoff = now - STATS_RETENTION_MS[retention];
+	const kept = (stats.events || []).filter((e) => (e?.timestamp ?? 0) >= cutoff);
+
+	// Events are stored newest-first; fold oldest → newest so the rebuilt
+	// list keeps that order and counters derive purely from the window.
+	let pruned: BreakStats = { ...DEFAULT_STATS, events: [] };
+	for (let i = kept.length - 1; i >= 0; i--) {
+		pruned = nextStats(pruned, kept[i]);
+	}
+	return pruned;
+}
 
 /**
  * Pure fold: stats after applying one new event. Away sessions are recorded
@@ -82,6 +107,11 @@ export function normalizeSettings(raw: unknown): Settings {
 		? (s.soundPreset as Settings['soundPreset'])
 		: fallback.soundPreset;
 
+	const retention: StatsRetention =
+		s.statsRetention === '1w' || s.statsRetention === '1m' || s.statsRetention === '6m'
+			? s.statsRetention
+			: 'forever';
+
 	return {
 		eyeEnabled: bool(s.eyeEnabled, fallback.eyeEnabled),
 		eyeIntervalMin: num(s.eyeIntervalMin, fallback.eyeIntervalMin, 1, 240),
@@ -96,6 +126,7 @@ export function normalizeSettings(raw: unknown): Settings {
 		idleThresholdSec: num(s.idleThresholdSec, fallback.idleThresholdSec, 30, 3600),
 		awayResetMin: num(s.awayResetMin, fallback.awayResetMin, 1, 120),
 		overlayOpacity: num(s.overlayOpacity, fallback.overlayOpacity, 0.2, 1),
-		hud2x: bool(s.hud2x, fallback.hud2x)
+		hud2x: bool(s.hud2x, fallback.hud2x),
+		statsRetention: retention
 	};
 }

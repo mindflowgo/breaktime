@@ -142,9 +142,10 @@ pub fn show_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), S
 }
 
 /// Adjust the overlay panel's alpha natively (0.0 transparent – 1.0 opaque),
-/// matching llm_gauge. CSS opacity on a transparent NSPanel's webview is
-/// unreliable (flickers / doesn't apply while compositing), but the panel's
-/// own alpha is rock solid.
+/// matching llm_gauge. CSS opacity on a transparent webview window is
+/// unreliable (flickers / doesn't apply while compositing), but native window
+/// alpha is solid: NSPanel setAlphaValue on macOS, a WS_EX_LAYERED layered
+/// window with SetLayeredWindowAttributes on Windows.
 #[tauri::command]
 pub fn native_overlay_set_opacity(app: tauri::AppHandle, alpha: f64) -> Result<(), String> {
     let clamped = alpha.clamp(0.0, 1.0);
@@ -157,8 +158,35 @@ pub fn native_overlay_set_opacity(app: tauri::AppHandle, alpha: f64) -> Result<(
             return Ok(());
         }
     }
-    let _ = clamped;
-    Ok(())
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if let Ok(hwnd) = overlay.hwnd() {
+                // Re-wrap the raw handle so we don't depend on which `windows`
+                // crate version tauri re-exports.
+                let h = HWND(hwnd.0 as *mut _);
+                unsafe {
+                    let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+                    let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as isize);
+                    let _ = SetLayeredWindowAttributes(
+                        h,
+                        windows::Win32::Foundation::COLORREF(0),
+                        (clamped * 255.0).round() as u8,
+                        LWA_ALPHA,
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = clamped;
+        Ok(())
+    }
 }
 
 pub fn hide_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {

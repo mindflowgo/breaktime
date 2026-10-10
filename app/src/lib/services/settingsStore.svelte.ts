@@ -4,7 +4,7 @@ import {
 	type BreakStats,
 	type Settings
 } from '$lib/types';
-import { nextStats, normalizeSettings, normalizeStats } from '$lib/services/breakLogic';
+import { nextStats, normalizeSettings, normalizeStats, pruneStatsToRetention } from '$lib/services/breakLogic';
 import { EV_SETTINGS_CHANGED, EV_STATS_CHANGED, EV_STATS_RESET } from '$lib/services/events';
 import {
 	emitTauriEvent,
@@ -152,6 +152,8 @@ class SettingsStore {
 		this.settings = normalizeSettings(loadedSettings);
 		if (loadedStats) {
 			this.stats = normalizeStats(loadedStats);
+			// Keep the stats file inside the chosen retention window.
+			this.stats = pruneStatsToRetention(this.stats, this.settings.statsRetention);
 		}
 
 		// Reconcile cache in localStorage
@@ -168,7 +170,23 @@ class SettingsStore {
 	async updateSettings(partial: Partial<Settings>) {
 		if (!this.isLoaded) await this.load();
 
+		const previous = this.settings;
 		this.settings = normalizeSettings({ ...this.settings, ...partial });
+
+		// Retention shortened → truncate the stats file to the new window.
+		if (this.settings.statsRetention !== previous.statsRetention) {
+			const pruned = pruneStatsToRetention(this.stats, this.settings.statsRetention);
+			if (pruned.events.length !== this.stats.events.length) {
+				this.stats = pruned;
+				if (typeof localStorage !== 'undefined') {
+					try {
+						localStorage.setItem(LOCAL_STORAGE_STATS, JSON.stringify(pruned));
+					} catch {}
+				}
+				await this.persistWithRetry(STATS_KEY, pruned, 'Break statistics');
+				await emitTauriEvent(EV_STATS_CHANGED, { sender: SENDER_ID, data: pruned });
+			}
+		}
 
 		// Notify local listeners immediately (the sender never re-applies its own echo)
 		for (const listener of this.settingsChangeListeners) {
