@@ -4,6 +4,7 @@ use tauri::Manager;
 
 pub mod native;
 pub mod settings;
+pub mod sound;
 pub mod window_state;
 
 use window_state::*;
@@ -14,6 +15,8 @@ pub fn run() {
 
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_idlemonitor::init());
 
@@ -149,6 +152,9 @@ pub fn run() {
             native::native_overlay_set_opacity,
             settings::get_setting,
             settings::set_setting,
+            sound::import_custom_sound,
+            sound::get_custom_sound_data,
+            sound::cleanup_custom_sounds,
         ])
         .build(tauri::generate_context!())
         .expect("error while running breaktime application")

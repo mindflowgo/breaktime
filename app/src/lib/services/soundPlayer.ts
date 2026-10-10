@@ -1,8 +1,87 @@
 import type { SoundPreset } from '$lib/types';
+import { tauriInvoke } from '$lib/services/windowManager';
 
 let audioCtx: AudioContext | null = null;
 let currentMasterGain: GainNode | null = null;
 let activePlayTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// ---- Custom sound (uploaded mp3/wav) playback via an <audio> element ----
+
+let customAudio: HTMLAudioElement | null = null;
+let customFadeInterval: ReturnType<typeof setInterval> | null = null;
+let customRepeatsLeft = 0;
+let customTargetVolume = 1;
+
+function stopCustomAudio(): void {
+	if (customFadeInterval) {
+		clearInterval(customFadeInterval);
+		customFadeInterval = null;
+	}
+	if (customAudio) {
+		try {
+			customAudio.pause();
+			customAudio.currentTime = 0;
+		} catch {}
+	}
+	customRepeatsLeft = 0;
+}
+
+async function getCustomSoundUrl(fileName?: string): Promise<string | null> {
+	if (!fileName) return null;
+	const dataUrl = await tauriInvoke<string>('get_custom_sound_data', { fileName });
+	return typeof dataUrl === 'string' ? dataUrl : null;
+}
+
+async function playCustomSound(
+	fileName: string | undefined,
+	volume: number,
+	fadeIn: boolean,
+	repeatCount: number
+): Promise<void> {
+	stopCustomAudio();
+
+	const url = await getCustomSoundUrl(fileName);
+	if (!url) return; // no file imported — stay silent rather than surprise
+
+	const clampedVol = Math.max(0.05, Math.min(1, volume));
+	customTargetVolume = clampedVol;
+	customRepeatsLeft = Math.max(1, Math.min(5, repeatCount)) - 1;
+
+	const el = new Audio(url);
+	el.volume = fadeIn ? 0.02 : clampedVol;
+	customAudio = el;
+
+	if (fadeIn) {
+		const step = clampedVol / 12;
+		customFadeInterval = setInterval(() => {
+			if (!customAudio || customAudio !== el) return;
+			const next = Math.min(customTargetVolume, customAudio.volume + step);
+			customAudio.volume = next;
+			if (next >= customTargetVolume && customFadeInterval) {
+				clearInterval(customFadeInterval);
+				customFadeInterval = null;
+			}
+		}, 50);
+	}
+
+	el.onended = () => {
+		if (customAudio !== el) return;
+		if (customRepeatsLeft > 0) {
+			customRepeatsLeft--;
+			try {
+				el.currentTime = 0;
+				el.volume = clampedVol;
+				void el.play();
+			} catch {}
+		}
+	};
+
+	try {
+		await el.play();
+	} catch (err) {
+		console.warn('[SoundPlayer] Custom sound playback failed:', err);
+	}
+}
 
 function getAudioContext(): AudioContext {
 	if (!audioCtx) {
@@ -39,6 +118,8 @@ export function stopSound(): void {
 		clearTimeout(activePlayTimeout);
 		activePlayTimeout = null;
 	}
+
+	stopCustomAudio();
 
 	if (currentMasterGain && audioCtx) {
 		try {
@@ -350,6 +431,17 @@ export async function playSound(
 
 	stopSound();
 
+	if (preset === 'custom') {
+		const { settingsStore } = await import('$lib/services/settingsStore.svelte');
+		await playCustomSound(
+			settingsStore.settings.customSoundFile,
+			volume,
+			fadeIn,
+			repeatCount
+		);
+		return;
+	}
+
 	const ctx = getAudioContext();
 	const { master, lowpass } = buildMasterChain(ctx, volume, fadeIn, preset);
 	const presetDuration = schedulePresetPhrase(ctx, master, lowpass, preset, ctx.currentTime);
@@ -376,6 +468,14 @@ export async function playBreakEnd(
 	if (typeof window === 'undefined') return;
 
 	stopSound();
+
+	// A custom sound marks the end by replaying — there is no synth flourish
+	// to layer over user-provided audio.
+	if (preset === 'custom') {
+		const { settingsStore } = await import('$lib/services/settingsStore.svelte');
+		await playCustomSound(settingsStore.settings.customSoundFile, volume, fadeIn, 1);
+		return;
+	}
 
 	const ctx = getAudioContext();
 	const { master, lowpass } = buildMasterChain(ctx, volume, fadeIn, preset);

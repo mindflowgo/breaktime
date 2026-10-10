@@ -29,7 +29,7 @@ A compact always-on-top pill (macOS `NSPanel` via `tauri-nspanel`), borderless a
 Each break: **start sound** → guided countdown (blinking eye / stretch figure) → user completes (✓/click/Enter), skips (✕/Esc), or lets it expire → **end sound**.
 
 - The end-of-break sound is the **same preset phrase as the start chime followed by an ascending triumphant flourish** (C5→E5→G5→C6 bell sparkle) so "break done" is audibly distinct from "break start". It plays on *completed* and *expired*, not on *skip*.
-- All sounds are synthesized (Web Audio, no assets). Volume, fade-in and repeat (1–5×) are configurable; six calm presets (soft bell, gentle chime, calm drop, calm piano, morning dew, still water).
+- All sounds are synthesized (Web Audio, no assets). Volume, fade-in and repeat (1–5×) are configurable; six calm presets (soft bell, gentle chime, calm drop, calm piano, morning dew, still water) plus a **custom sound**: pick an mp3/wav/ogg/m4a/aac/flac in Settings → Sounds ("Choose file…"). The file is copied into the app data dir (`custom-sound.<ext>`) via `import_custom_sound`, the chosen file name is persisted as `settings.customSoundFile`, and playback (volume, fade-in, repeat) goes through an `<audio>` element served from `get_custom_sound_data` as a data URL. The end-of-break replay for a custom sound is the sound itself (no synth flourish).
 - The overlay's `AudioContext` is unlocked on the first pointer gesture (WKWebView keeps it suspended otherwise).
 
 Stats record `completed` / `skipped` / `expired` per type — expired prompts count against adherence. Away sessions record one event on return with the measured duration.

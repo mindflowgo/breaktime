@@ -4,7 +4,8 @@ export type SoundPreset =
 	| 'calm-drop'
 	| 'calm-piano'
 	| 'morning-dew'
-	| 'still-water';
+	| 'still-water'
+	| 'custom';
 
 export interface SoundPresetInfo {
 	id: SoundPreset;
@@ -71,6 +72,8 @@ export interface Settings {
 	soundVolume: number; // 0 to 1
 	soundFadeIn: boolean;
 	soundRepeat: number; // 1 to 5 phrase repetitions
+	/** File name (in the app data dir) of the uploaded custom sound. */
+	customSoundFile?: string;
 	idleThresholdSec: number; // default 300 (5 min)
 	awayResetMin: number; // default 10 min
 	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)

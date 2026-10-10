@@ -1,15 +1,18 @@
 <script lang="ts">
-	import { Minus, Play, Plus, Volume2 } from 'lucide-svelte';
+	import { Minus, Play, Plus, Upload, Volume2 } from 'lucide-svelte';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import { previewSound } from '$lib/services/soundPlayer';
-	import { SOUND_PRESETS } from '$lib/types';
+	import { tauriInvoke, tauriInvokeStrict } from '$lib/services/windowManager';
+	import { SOUND_PRESETS, type SoundPreset } from '$lib/types';
 	import SettingSlider from '$lib/components/SettingSlider.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
 
 	let isPlayingPreview = $state(false);
 	let previewTimeout: ReturnType<typeof setTimeout> | null = null;
+	let customError = $state<string | null>(null);
+	let isCustom = $derived(settingsStore.settings.soundPreset === 'custom');
 
-	function handlePreview(presetId?: (typeof SOUND_PRESETS)[number]['id']) {
+	function handlePreview(presetId?: SoundPreset) {
 		const targetPreset = presetId || settingsStore.settings.soundPreset;
 		isPlayingPreview = true;
 		previewSound(
@@ -28,6 +31,30 @@
 		const next = Math.max(1, Math.min(5, (settingsStore.settings.soundRepeat || 1) + delta));
 		if (next !== settingsStore.settings.soundRepeat) {
 			settingsStore.updateSettings({ soundRepeat: next });
+		}
+	}
+
+	/** Pick an audio file, copy it into the app data dir, select it. */
+	async function chooseCustomSound() {
+		customError = null;
+		try {
+			const { open } = await import('@tauri-apps/plugin-dialog');
+			const path = await open({
+				multiple: false,
+				directory: false,
+				filters: [
+					{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }
+				]
+			});
+			if (typeof path !== 'string') return;
+
+			const fileName = await tauriInvokeStrict<string>('import_custom_sound', { source: path });
+			await tauriInvoke('cleanup_custom_sounds', { keep: fileName });
+			await settingsStore.updateSettings({ soundPreset: 'custom', customSoundFile: fileName });
+			handlePreview('custom');
+		} catch (err) {
+			console.error('[Sounds] Custom sound import failed:', err);
+			customError = err instanceof Error ? err.message : String(err);
 		}
 	}
 </script>
@@ -89,9 +116,65 @@
 						{preset.description}
 					</span>
 				</div>
-			{/each}
-		</div>
-	</section>
+				{/each}
+			</div>
+		</section>
+
+		<!-- Custom Sound -->
+		<section class="rounded-xl border border-white/10 bg-zinc-900/40 p-4">
+			<div class="flex items-center justify-between pb-3 border-b border-white/5">
+				<div>
+					<h2 class="text-sm font-semibold text-white">Custom Sound</h2>
+					<p class="text-xs text-zinc-400">Use your own mp3/wav instead of a preset</p>
+				</div>
+				<button
+					type="button"
+					onclick={chooseCustomSound}
+					class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 rounded-lg transition-colors cursor-pointer"
+				>
+					<Upload class="w-3 h-3" />
+					<span>Choose file…</span>
+				</button>
+			</div>
+
+			<div class="pt-3 flex items-center justify-between gap-3">
+				<div class="min-w-0">
+					<span class="text-xs font-semibold {isCustom ? 'text-emerald-300' : 'text-zinc-300'}">
+						{isCustom
+							? (settingsStore.settings.customSoundFile ?? 'Custom sound')
+							: 'Not selected — presets above are in use'}
+					</span>
+					{#if customError}
+						<p class="text-[11px] text-rose-400 mt-0.5">{customError}</p>
+					{:else if isCustom}
+						<p class="text-[11px] text-zinc-500 mt-0.5">
+							Stored in your app data folder — survives restarts.
+						</p>
+					{/if}
+				</div>
+				<div class="flex items-center gap-2 flex-shrink-0">
+					<button
+						type="button"
+						onclick={() => handlePreview('custom')}
+						disabled={!settingsStore.settings.customSoundFile}
+						class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+					>
+						<Play class="w-3 h-3 fill-current" />
+						<span>Preview</span>
+					</button>
+					{#if !isCustom}
+						<button
+							type="button"
+							onclick={() => settingsStore.updateSettings({ soundPreset: 'custom' })}
+							disabled={!settingsStore.settings.customSoundFile}
+							class="px-2.5 py-1 text-xs font-medium bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+						>
+							Use
+						</button>
+					{/if}
+				</div>
+			</div>
+		</section>
 
 	<!-- Volume, Repeat & Fade Controls -->
 	<section class="rounded-xl border border-white/10 bg-zinc-900/40 p-4 space-y-3.5">

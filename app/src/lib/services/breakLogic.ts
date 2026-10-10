@@ -103,9 +103,17 @@ export function normalizeSettings(raw: unknown): Settings {
 	};
 	const bool = (v: unknown, def: boolean): boolean => (typeof v === 'boolean' ? v : def);
 
-	const preset = SOUND_PRESETS.some((p) => p.id === s.soundPreset)
+	const isKnownPreset =
+		s.soundPreset === 'custom' || SOUND_PRESETS.some((p) => p.id === s.soundPreset);
+	const preset = isKnownPreset
 		? (s.soundPreset as Settings['soundPreset'])
 		: fallback.soundPreset;
+
+	// The custom sound file name is only honored alongside the custom preset.
+	const customSoundFile =
+		s.customSoundFile && typeof s.customSoundFile === 'string'
+			? s.customSoundFile
+			: fallback.customSoundFile;
 
 	const retention: StatsRetention =
 		s.statsRetention === '1w' || s.statsRetention === '1m' || s.statsRetention === '6m'
@@ -120,6 +128,7 @@ export function normalizeSettings(raw: unknown): Settings {
 		stretchIntervalMin: num(s.stretchIntervalMin, fallback.stretchIntervalMin, 1, 480),
 		stretchDurationSec: num(s.stretchDurationSec, fallback.stretchDurationSec, 10, 600),
 		soundPreset: preset,
+		customSoundFile: preset === 'custom' ? customSoundFile : undefined,
 		soundVolume: num(s.soundVolume, fallback.soundVolume, 0.05, 1),
 		soundFadeIn: bool(s.soundFadeIn, fallback.soundFadeIn),
 		soundRepeat: num(s.soundRepeat, fallback.soundRepeat, 1, 5),
