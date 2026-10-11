@@ -19,6 +19,11 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_idlemonitor::init());
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![]),
+    ));
 
     builder
         .setup(|app| {

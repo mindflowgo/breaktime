@@ -1,27 +1,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { BarChart3, Clock, Minimize2, Moon, Sparkles, Volume2, AlertTriangle } from 'lucide-svelte';
+	import { BarChart3, Minimize2, Settings2, Sparkles, Volume2, AlertTriangle } from 'lucide-svelte';
 	import { enterOverlayMode, listenTauriEvent } from '$lib/services/windowManager';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import { timerManager } from '$lib/services/timerManager.svelte';
 	import { stopSound } from '$lib/services/soundPlayer';
 	import { EV_OPEN_TAB } from '$lib/services/events';
-	import RemindersTab from '$lib/components/settings/RemindersTab.svelte';
 	import SoundsTab from '$lib/components/settings/SoundsTab.svelte';
-	import InactivityTab from '$lib/components/settings/InactivityTab.svelte';
+	import OtherTab from '$lib/components/settings/OtherTab.svelte';
 	import StatsTab from '$lib/components/settings/StatsTab.svelte';
 
-	const TAB_IDS = ['reminders', 'sounds', 'inactivity', 'stats'] as const;
+	const TAB_IDS = ['sounds', 'other', 'stats'] as const;
 	type TabId = (typeof TAB_IDS)[number];
 
-	const TAB_META: Record<TabId, { icon: typeof Clock; label: string }> = {
-		reminders: { icon: Clock, label: 'Reminders' },
+	const TAB_META: Record<TabId, { icon: typeof Volume2; label: string }> = {
 		sounds: { icon: Volume2, label: 'Sounds' },
-		inactivity: { icon: Moon, label: 'Inactivity' },
-		stats: { icon: BarChart3, label: 'Stats & History' }
+		other: { icon: Settings2, label: 'Other' },
+		stats: { icon: BarChart3, label: 'Stats' }
 	};
 
-	let currentTab = $state<TabId>('reminders');
+	let currentTab = $state<TabId>('sounds');
 
 	function isTabId(v: unknown): v is TabId {
 		return typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v);
@@ -104,7 +102,7 @@
 
 	<!-- Segmented Tab Bar -->
 	<div class="px-5 pt-3.5 pb-2 flex-shrink-0 bg-zinc-950">
-		<div class="flex items-center bg-zinc-900 border border-white/10 p-0.5 rounded-xl max-w-lg">
+		<div class="flex items-center bg-zinc-900 border border-white/10 p-0.5 rounded-xl max-w-2xl">
 			{#each TAB_IDS as tab (tab)}
 				{@const meta = TAB_META[tab]}
 				<button
@@ -123,12 +121,10 @@
 
 	<!-- Main Content Area -->
 	<main class="flex-1 overflow-y-auto px-5 py-3">
-		{#if currentTab === 'reminders'}
-			<RemindersTab />
-		{:else if currentTab === 'sounds'}
+		{#if currentTab === 'sounds'}
 			<SoundsTab />
-		{:else if currentTab === 'inactivity'}
-			<InactivityTab />
+		{:else if currentTab === 'other'}
+			<OtherTab />
 		{:else}
 			<StatsTab />
 		{/if}

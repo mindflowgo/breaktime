@@ -261,12 +261,12 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         let toggle_overlay = MenuItemBuilder::with_id("toggle-overlay", "Toggle Visible").build(app)?;
         let open_settings = MenuItemBuilder::with_id("open-settings", "Settings & Stats").build(app)?;
         let sep1 = PredefinedMenuItem::separator(app)?;
-        let eye_now = MenuItemBuilder::with_id("eye-now", "👀 Take Eye Break Now").build(app)?;
-        let stretch_now = MenuItemBuilder::with_id("stretch-now", "🧍 Take Stretch Break Now").build(app)?;
+        let eye_now = MenuItemBuilder::with_id("eye-now", "Take Eye Break Now").build(app)?;
+        let stretch_now = MenuItemBuilder::with_id("stretch-now", "Take Stretch Break Now").build(app)?;
         let initial_2x = crate::settings::get_setting_value(app.handle(), "settings")
             .and_then(|v| v.get("hud2x").and_then(|b| b.as_bool()))
             .unwrap_or(false);
-        let hud_2x = tauri::menu::CheckMenuItemBuilder::with_id("hud-2x", "2× HUD Size")
+        let hud_2x = tauri::menu::CheckMenuItemBuilder::with_id("hud-2x", "2× Size")
             .checked(initial_2x)
             .build(app)?;
         app.manage(TrayState(std::sync::Mutex::new(Some(hud_2x.clone()))));

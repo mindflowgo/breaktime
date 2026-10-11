@@ -582,7 +582,7 @@ class TimerManager {
 			durationSec: this.durationFor(type)
 		});
 
-		await this.finishActiveBreak(type, 'completed');
+		await this.finishActiveBreak('completed');
 	}
 
 	async skipBreak() {
@@ -600,7 +600,7 @@ class TimerManager {
 			durationSec: this.durationFor(type)
 		});
 
-		await this.finishActiveBreak(type, 'skipped');
+		await this.finishActiveBreak('skipped');
 	}
 
 	/**
@@ -619,7 +619,7 @@ class TimerManager {
 			durationSec: this.durationFor(type)
 		});
 
-		await this.finishActiveBreak(type, 'completed');
+		await this.finishActiveBreak('completed');
 	}
 
 	/** Reset one reminder countdown to its full interval. */
@@ -637,24 +637,13 @@ class TimerManager {
 		}
 	}
 
-	private async finishActiveBreak(type: BreakType, action: 'completed' | 'skipped') {
-		this.activeBreak = null;
-		this.breakTimeRemaining = 0;
-		this.breakTargetTimestamp = null;
-
-		const now = Date.now();
-
-		// Reset countdown for this break type
-		this.rearmTimerFor(type, now);
-
-		// Resume the other reminder if not paused or idle
-		if (!this.isPaused && !this.isIdle) {
-			if (type === 'eye' && settingsStore.settings.stretchEnabled && !this.stretchTargetTimestamp) {
-				this.stretchTargetTimestamp = now + this.stretchTimeRemaining * 1000;
-			} else if (type === 'stretch' && settingsStore.settings.eyeEnabled && !this.eyeTargetTimestamp) {
-				this.eyeTargetTimestamp = now + this.eyeTimeRemaining * 1000;
-			}
-		}
+	/**
+	 * Ending a break resets every countdown to its full interval — coming
+	 * back from a break always starts a fresh cycle for both reminder types,
+	 * not just the one whose break just ran.
+	 */
+	private async finishActiveBreak(action: 'completed' | 'skipped') {
+		this.resetTimersInternal();
 
 		// End-of-break cue: fixed gentle two-tone "tum-tuumm" (not a repeat of
 		// the start chime) — played when the routine actually ran (not skip).

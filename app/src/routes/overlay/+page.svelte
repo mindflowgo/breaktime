@@ -45,7 +45,7 @@
 	// pull the time up into it so it sits on the eye's base instead of
 	// stretching the window taller. (The stretch person's time stays put.)
 	let timeTuckClass = $derived(hudScale === 2 ? '-mt-2' : '-mt-0.5');
-	let personClass = $derived(hudScale === 2 ? 'w-[26px] h-[26px]' : 'w-[14px] h-[14px]');
+	let personClass = $derived(hudScale === 2 ? 'w-[32px] h-[32px]' : 'w-[24px] h-[24px]');
 	let personTimeClass = $derived(hudScale === 2 ? 'text-[11px]' : 'text-[8px]');
 	let stretchFigClass = $derived(hudScale === 2 ? 'w-[62px] h-[62px]' : 'w-[34px] h-[34px]');
 
@@ -247,7 +247,7 @@
 	// firing or the ⋮ menu (Eye/Stretch Now); an active break completes via
 	// Enter and skips via the ✕ button or Esc.
 
-	async function handleOpenSettings(tab: 'reminders' | 'sounds' | 'inactivity' | 'stats' = 'reminders') {
+	async function handleOpenSettings(tab: 'sounds' | 'other' | 'stats' = 'other') {
 		await closeMenu();
 		if (typeof localStorage !== 'undefined') {
 			localStorage.setItem('breaktime_active_tab', tab);
@@ -459,7 +459,7 @@
 		>
 			<button
 				type="button"
-				onclick={() => handleOpenSettings('reminders')}
+				onclick={() => handleOpenSettings('other')}
 				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
 			>
 				<Settings class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />

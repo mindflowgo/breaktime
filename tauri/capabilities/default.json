@@ -17,6 +17,9 @@
     "core:window:default",
     "core:window:allow-start-dragging",
     "dialog:default",
-    "idlemonitor:default"
+    "idlemonitor:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

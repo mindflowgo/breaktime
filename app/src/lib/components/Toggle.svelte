@@ -3,11 +3,13 @@
 	let {
 		checked,
 		onChange,
-		accent = 'emerald'
+		accent = 'emerald',
+		disabled = false
 	}: {
 		checked: boolean;
 		onChange: (value: boolean) => void;
 		accent?: 'emerald' | 'amber';
+		disabled?: boolean;
 	} = $props();
 
 	const ON: Record<'emerald' | 'amber', string> = {
@@ -16,10 +18,15 @@
 	};
 </script>
 
-<label class="relative inline-flex items-center cursor-pointer">
+<label
+	class="relative inline-flex items-center {disabled
+		? 'opacity-40 pointer-events-none'
+		: 'cursor-pointer'}"
+>
 	<input
 		type="checkbox"
 		{checked}
+		{disabled}
 		onchange={(e) => onChange((e.target as HTMLInputElement).checked)}
 		class="sr-only peer"
 	/>
