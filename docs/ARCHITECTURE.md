@@ -28,11 +28,11 @@ A compact always-on-top pill (macOS `NSPanel` via `tauri-nspanel`), borderless a
 
 Each break: **start sound** → guided countdown (blinking eye / stretch figure) → user completes (✓/click/Enter), skips (✕/Esc), or lets it expire → **end sound**.
 
-- The end-of-break sound is a **fixed gentle two-tone completion cue** — a short low "tum" (A4) resolving to a longer, warm, higher "tuuumm" (E5) — independent of the start chime (and of custom sounds), so "time's up" is instantly distinguishable. It plays on *completed* and *expired*, not on *skip*.
+- The end-of-break sound is a **fixed gentle two-tone completion cue** — a short low "tum" (A4) resolving to a longer, warm, higher "tuuumm" (E5) — independent of the start chime (and of custom sounds), so "time's up" is instantly distinguishable. It plays whenever a break ends naturally or is completed — only an explicit *skip* stays silent.
 - All sounds are synthesized (Web Audio, no assets). Volume, fade-in and repeat (1–5×) are configurable; six calm presets (soft bell, gentle chime, calm drop, calm piano, morning dew, still water) plus a **custom sound**: pick an mp3/wav/ogg/m4a/aac/flac in Settings → Sounds ("Choose file…"). The file is copied into the app data dir (`custom-sound.<ext>`) via `import_custom_sound`, the chosen file name is persisted as `settings.customSoundFile`, and playback (volume, fade-in, repeat) goes through an `<audio>` element served from `get_custom_sound_data` as a data URL.
 - The overlay's `AudioContext` is unlocked on the first pointer gesture (WKWebView keeps it suspended otherwise).
 
-Stats record `completed` / `skipped` / `expired` per type — expired prompts count against adherence. Away sessions record one event on return with the measured duration.
+Stats record `completed` / `skipped` per type. A break that runs to the end of its countdown with no interaction **counts as completed** — the user is assumed to have done the exercise unless they explicitly clicked Skip. Away sessions record one event on return with the measured duration. Legacy `expired` events from older builds are dropped on load.
 
 ## Timer ownership (important)
 

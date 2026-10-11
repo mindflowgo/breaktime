@@ -28,18 +28,11 @@ describe('nextStats', () => {
 		expect(next.stretchCompleted).toBe(0);
 	});
 
-	it('counts skipped and expired separately', () => {
+	it('counts skipped separately from completed', () => {
 		let stats = nextStats(DEFAULT_STATS, event({ action: 'skipped' }));
-		stats = nextStats(stats, event({ action: 'expired', id: 'test-2' }));
+		stats = nextStats(stats, event({ action: 'completed', id: 'test-2' }));
 		expect(stats.totalSkipped).toBe(1);
-		expect(stats.totalExpired).toBe(1);
-		expect(stats.totalCompleted).toBe(0);
-	});
-
-	it('attributes expired breaks to the right type', () => {
-		const stats = nextStats(DEFAULT_STATS, event({ type: 'stretch', action: 'expired' }));
-		expect(stats.stretchExpired).toBe(1);
-		expect(stats.eyeExpired).toBe(0);
+		expect(stats.totalCompleted).toBe(1);
 	});
 
 	it('records one away-session event without touching break counters', () => {
@@ -64,9 +57,8 @@ describe('nextStats', () => {
 
 	it('treats missing counters as zero (legacy stats on disk)', () => {
 		const legacy = { totalCompleted: 3, events: [{ id: 'x' }] } as unknown as BreakStats;
-		const next = nextStats(legacy, event({ action: 'expired' }));
-		expect(next.totalCompleted).toBe(3);
-		expect(next.totalExpired).toBe(1);
+		const next = nextStats(legacy, event({ action: 'completed' }));
+		expect(next.totalCompleted).toBe(4);
 	});
 });
 
@@ -76,19 +68,30 @@ describe('normalizeStats', () => {
 		expect(normalizeStats('nonsense').events).toEqual([]);
 	});
 
-	it('fills missing expired counters from older persisted stats', () => {
+	it('fills missing fields from older persisted stats', () => {
 		const legacy = { totalCompleted: 2, totalSkipped: 1, events: [] };
 		const stats = normalizeStats(legacy);
-		expect(stats.totalExpired).toBe(0);
 		expect(stats.totalCompleted).toBe(2);
+		expect(stats.totalSkipped).toBe(1);
 		expect(stats.events).toEqual([]);
 	});
 
 	it('keeps known counters', () => {
-		const stats = normalizeStats({ totalExpired: 4, eyeSkipped: 2, awayCount: 7 });
-		expect(stats.totalExpired).toBe(4);
+		const stats = normalizeStats({ totalCompleted: 4, eyeSkipped: 2, awayCount: 7 });
+		expect(stats.totalCompleted).toBe(4);
 		expect(stats.eyeSkipped).toBe(2);
 		expect(stats.awayCount).toBe(7);
+	});
+
+	it('drops events recorded under the retired expired action', () => {
+		const stats = normalizeStats({
+			totalCompleted: 1,
+			events: [
+				{ id: 'a', timestamp: 1, type: 'eye', action: 'expired', durationSec: 20 },
+				{ id: 'b', timestamp: 2, type: 'eye', action: 'completed', durationSec: 20 }
+			]
+		});
+		expect(stats.events.map((e) => e.id)).toEqual(['b']);
 	});
 });
 

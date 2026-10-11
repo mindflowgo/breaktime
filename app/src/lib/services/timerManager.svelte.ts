@@ -528,12 +528,13 @@ class TimerManager {
 		}
 		if (type === 'away') return;
 
-		// If another break is active, record it as expired before replacing it.
+		// If another break is active, count it as completed before replacing it
+		// (the user is assumed to have done it unless they explicitly skip).
 		const interrupted = this.claimActiveBreak();
 		if (interrupted && interrupted !== type) {
 			await settingsStore.recordBreak({
 				type: interrupted,
-				action: 'expired',
+				action: 'completed',
 				durationSec: this.durationFor(interrupted)
 			});
 			this.rearmTimerFor(interrupted, Date.now());
@@ -603,10 +604,10 @@ class TimerManager {
 	}
 
 	/**
-	 * Countdown reached zero without user action: record as 'expired' so
-	 * adherence stats are not inflated by ignored prompts.
+	 * Countdown reached zero without user action: count it as completed — the
+	 * user is assumed to have done the exercise unless they click Skip.
 	 */
-	async expireBreak() {
+	async completeBreakNaturally() {
 		if (!this.isMaster) return;
 
 		const type = this.claimActiveBreak();
@@ -614,11 +615,11 @@ class TimerManager {
 
 		await settingsStore.recordBreak({
 			type,
-			action: 'expired',
+			action: 'completed',
 			durationSec: this.durationFor(type)
 		});
 
-		await this.finishActiveBreak(type, 'expired');
+		await this.finishActiveBreak(type, 'completed');
 	}
 
 	/** Reset one reminder countdown to its full interval. */
@@ -636,7 +637,7 @@ class TimerManager {
 		}
 	}
 
-	private async finishActiveBreak(type: BreakType, action: 'completed' | 'skipped' | 'expired') {
+	private async finishActiveBreak(type: BreakType, action: 'completed' | 'skipped') {
 		this.activeBreak = null;
 		this.breakTimeRemaining = 0;
 		this.breakTargetTimestamp = null;
@@ -696,7 +697,7 @@ class TimerManager {
 			);
 
 			if (this.breakTimeRemaining <= 0) {
-				void this.expireBreak();
+				void this.completeBreakNaturally();
 				return;
 			}
 

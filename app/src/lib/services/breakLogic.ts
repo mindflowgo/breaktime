@@ -49,20 +49,18 @@ export function nextStats(stats: BreakStats, event: BreakEvent): BreakStats {
 	return {
 		totalCompleted: (stats.totalCompleted || 0) + (!isAway && action === 'completed' ? 1 : 0),
 		totalSkipped: (stats.totalSkipped || 0) + (action === 'skipped' ? 1 : 0),
-		totalExpired: (stats.totalExpired || 0) + (action === 'expired' ? 1 : 0),
 		eyeCompleted: (stats.eyeCompleted || 0) + (isEye && action === 'completed' ? 1 : 0),
 		eyeSkipped: (stats.eyeSkipped || 0) + (isEye && action === 'skipped' ? 1 : 0),
-		eyeExpired: (stats.eyeExpired || 0) + (isEye && action === 'expired' ? 1 : 0),
 		stretchCompleted: (stats.stretchCompleted || 0) + (isStretch && action === 'completed' ? 1 : 0),
 		stretchSkipped: (stats.stretchSkipped || 0) + (isStretch && action === 'skipped' ? 1 : 0),
-		stretchExpired: (stats.stretchExpired || 0) + (isStretch && action === 'expired' ? 1 : 0),
 		awayCount: (stats.awayCount || 0) + (isAway ? 1 : 0),
 		totalAwaySec: (stats.totalAwaySec || 0) + (isAway ? event.durationSec || 0 : 0),
 		events: [event, ...(stats.events || [])].slice(0, MAX_EVENTS)
 	};
 }
 
-/** Normalizes a partially-loaded stats object (disk / cross-window payload). */
+/** Normalizes a partially-loaded stats object (disk / cross-window payload).
+ *  Events recorded under the retired 'expired' action are dropped. */
 export function normalizeStats(raw: unknown): BreakStats {
 	if (!raw || typeof raw !== 'object') {
 		return { ...DEFAULT_STATS, events: [] };
@@ -71,16 +69,15 @@ export function normalizeStats(raw: unknown): BreakStats {
 	return {
 		totalCompleted: Number(partial.totalCompleted) || 0,
 		totalSkipped: Number(partial.totalSkipped) || 0,
-		totalExpired: Number(partial.totalExpired) || 0,
 		eyeCompleted: Number(partial.eyeCompleted) || 0,
 		eyeSkipped: Number(partial.eyeSkipped) || 0,
-		eyeExpired: Number(partial.eyeExpired) || 0,
 		stretchCompleted: Number(partial.stretchCompleted) || 0,
 		stretchSkipped: Number(partial.stretchSkipped) || 0,
-		stretchExpired: Number(partial.stretchExpired) || 0,
 		awayCount: Number(partial.awayCount) || 0,
 		totalAwaySec: Number(partial.totalAwaySec) || 0,
-		events: Array.isArray(partial.events) ? partial.events : []
+		events: Array.isArray(partial.events)
+			? partial.events.filter((e) => e && (e.action as string) !== 'expired')
+			: []
 	};
 }
 

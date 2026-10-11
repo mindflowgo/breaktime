@@ -111,11 +111,11 @@ export const DEFAULT_SETTINGS: Settings = {
 export type BreakType = 'eye' | 'stretch' | 'away';
 
 /**
- * 'completed': user clicked the checkmark (breaks) or returned from away.
- * 'skipped': user clicked the X.
- * 'expired': countdown reached zero without user action.
+ * 'completed': the break ran (checkmark, Enter, or natural expiry — the user
+ * is assumed to have done the exercise unless they clicked Skip).
+ * 'skipped': user clicked the X (or Esc).
  */
-export type BreakAction = 'completed' | 'skipped' | 'expired';
+export type BreakAction = 'completed' | 'skipped';
 
 export interface BreakEvent {
 	id: string;
@@ -128,13 +128,10 @@ export interface BreakEvent {
 export interface BreakStats {
 	totalCompleted: number;
 	totalSkipped: number;
-	totalExpired: number;
 	eyeCompleted: number;
 	eyeSkipped: number;
-	eyeExpired: number;
 	stretchCompleted: number;
 	stretchSkipped: number;
-	stretchExpired: number;
 	awayCount?: number;
 	totalAwaySec?: number;
 	events: BreakEvent[];
@@ -143,13 +140,10 @@ export interface BreakStats {
 export const DEFAULT_STATS: BreakStats = {
 	totalCompleted: 0,
 	totalSkipped: 0,
-	totalExpired: 0,
 	eyeCompleted: 0,
 	eyeSkipped: 0,
-	eyeExpired: 0,
 	stretchCompleted: 0,
 	stretchSkipped: 0,
-	stretchExpired: 0,
 	awayCount: 0,
 	totalAwaySec: 0,
 	events: []

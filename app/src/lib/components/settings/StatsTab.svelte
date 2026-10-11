@@ -1,13 +1,5 @@
 <script lang="ts">
-	import {
-		Activity,
-		AlarmClockOff,
-		CheckCircle2,
-		Eye,
-		Moon,
-		RotateCcw,
-		XCircle
-	} from 'lucide-svelte';
+	import { Activity, CheckCircle2, Eye, Moon, RotateCcw, XCircle } from 'lucide-svelte';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import type { Settings } from '$lib/types';
 
@@ -17,23 +9,19 @@
 	let overallAdherence = $derived(
 		pct(
 			settingsStore.stats.totalCompleted,
-			settingsStore.stats.totalCompleted +
-				settingsStore.stats.totalSkipped +
-				settingsStore.stats.totalExpired
+			settingsStore.stats.totalCompleted + settingsStore.stats.totalSkipped
 		)
 	);
 	let eyeAdherence = $derived(
 		pct(
 			settingsStore.stats.eyeCompleted,
-			settingsStore.stats.eyeCompleted + settingsStore.stats.eyeSkipped + settingsStore.stats.eyeExpired
+			settingsStore.stats.eyeCompleted + settingsStore.stats.eyeSkipped
 		)
 	);
 	let stretchAdherence = $derived(
 		pct(
 			settingsStore.stats.stretchCompleted,
-			settingsStore.stats.stretchCompleted +
-				settingsStore.stats.stretchSkipped +
-				settingsStore.stats.stretchExpired
+			settingsStore.stats.stretchCompleted + settingsStore.stats.stretchSkipped
 		)
 	);
 
@@ -86,14 +74,6 @@
 		</div>
 
 		<div class="rounded-xl border border-white/10 bg-zinc-900/40 p-3 flex flex-col">
-			<span class="text-[11px] font-medium text-zinc-400">Expired</span>
-			<span class="text-xl font-bold font-mono text-indigo-400 mt-1">
-				{settingsStore.stats.totalExpired}
-			</span>
-			<span class="text-[10px] text-zinc-500 mt-0.5">Ignored prompts</span>
-		</div>
-
-		<div class="rounded-xl border border-white/10 bg-zinc-900/40 p-3 flex flex-col">
 			<span class="text-[11px] font-medium text-zinc-400">Adherence Rate</span>
 			<span
 				class="text-xl font-bold font-mono mt-1"
@@ -142,7 +122,6 @@
 				<div class="flex justify-between text-[11px] text-zinc-500">
 					<span>Completed: {settingsStore.stats.eyeCompleted}</span>
 					<span>Skipped: {settingsStore.stats.eyeSkipped}</span>
-					<span>Expired: {settingsStore.stats.eyeExpired}</span>
 				</div>
 			</div>
 
@@ -162,7 +141,6 @@
 				<div class="flex justify-between text-[11px] text-zinc-500">
 					<span>Completed: {settingsStore.stats.stretchCompleted}</span>
 					<span>Skipped: {settingsStore.stats.stretchSkipped}</span>
-					<span>Expired: {settingsStore.stats.stretchExpired}</span>
 				</div>
 			</div>
 		</div>
@@ -258,8 +236,8 @@
 									<XCircle class="w-3 h-3" /> Skipped
 								</span>
 							{:else}
-								<span class="flex items-center gap-1 text-[11px] text-indigo-400 font-medium">
-									<AlarmClockOff class="w-3 h-3" /> Expired
+								<span class="flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+									<CheckCircle2 class="w-3 h-3" /> Completed
 								</span>
 							{/if}
 
