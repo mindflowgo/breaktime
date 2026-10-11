@@ -42,6 +42,13 @@ export const STRETCH_HUD_HEIGHT = 48;
 export const IDLE_HUD_2X_WIDTH = 149;
 export const IDLE_HUD_2X_HEIGHT = 69;
 
+/**
+ * Tick gap that counts as "the computer just woke from sleep": countdown
+ * targets are reset rather than resumed, since they predate the sleep.
+ * Well above normal 1s tick jitter, well below any real sleep.
+ */
+const SLEEP_GAP_RESET_MS = 60_000;
+
 class TimerManager {
 	// Master identity: only the overlay window owns countdown state.
 	isMaster = $state(false);
@@ -213,9 +220,9 @@ class TimerManager {
 		await this.applyIdleThreshold(settingsStore.settings.idleThresholdSec || 300);
 
 		this.trackUnlisten(
-			listenTauriEvent<{ idle: boolean; seconds?: number }>(EV_SYSTEM_IDLE, (payload) => {
+			listenTauriEvent<{ idle: boolean }>(EV_SYSTEM_IDLE, (payload) => {
 				if (this.isMaster && payload) {
-					this.handleIdleStateChange(payload.idle, payload.seconds);
+					this.handleIdleStateChange(payload.idle);
 				}
 			})
 		);
@@ -347,7 +354,7 @@ class TimerManager {
 		emitTauriEvent(EV_STATE_SYNC, payload);
 	}
 
-	handleIdleStateChange(isIdle: boolean, idleSeconds?: number) {
+	handleIdleStateChange(isIdle: boolean) {
 		if (!this.isMaster) return;
 
 		const now = Date.now();
@@ -356,18 +363,13 @@ class TimerManager {
 			this.awayStartTime = now;
 			this.freezeTimers(now);
 		} else {
-			if (this.awayStartTime || idleSeconds !== undefined) {
-				// Prefer the monitor's measured idle duration over wall-clock deltas
-				const awaySecs = Math.max(
-					1,
-					Math.round(idleSeconds ?? (now - (this.awayStartTime ?? now)) / 1000)
-				);
-				const thresholdMinutes = settingsStore.settings.awayResetMin || 10;
-				if (awaySecs / 60 >= thresholdMinutes) {
-					this.resetTimersInternal(now);
-				} else {
-					this.resumeTimers(now);
-				}
+			if (this.awayStartTime !== null) {
+				const awaySecs = Math.max(1, Math.round((now - this.awayStartTime) / 1000));
+
+				// Returning from away always starts a fresh cycle for both
+				// reminders — the 💤 → 👁 transition never preserves a
+				// partial countdown.
+				this.resetTimersInternal(now);
 
 				// One away-session event per session, recorded on return with
 				// the measured duration.
@@ -377,8 +379,6 @@ class TimerManager {
 					durationSec: awaySecs,
 					timestamp: now
 				});
-			} else {
-				this.resumeTimers(now);
 			}
 			this.isIdle = false;
 			this.awayStartTime = null;
@@ -662,13 +662,14 @@ class TimerManager {
 
 		const now = Date.now();
 
-		// Check for sleep/suspension gap
+		// Check for sleep/suspension gap: JS timers stall while the system
+		// sleeps, so a gap this big means we just woke — start fresh cycles
+		// (target timestamps would otherwise be far in the past and fire
+		// every break at once).
 		const elapsedSinceLastTick = this.lastTickTime ? now - this.lastTickTime : 0;
 		this.lastTickTime = now;
 
-		const awayResetMs = (settingsStore.settings.awayResetMin || 10) * 60 * 1000;
-		if (elapsedSinceLastTick >= awayResetMs) {
-			// Computer was asleep or suspended for >= awayResetMin, reset on return
+		if (elapsedSinceLastTick >= SLEEP_GAP_RESET_MS) {
 			this.resetTimersInternal(now);
 			this.emitStateSync();
 			return;

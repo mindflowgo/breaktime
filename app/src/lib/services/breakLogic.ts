@@ -1,7 +1,11 @@
 import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATS,
+	EYE_DURATION_SEC_OPTIONS,
+	EYE_INTERVAL_MIN_OPTIONS,
 	SOUND_PRESETS,
+	STRETCH_DURATION_SEC_OPTIONS,
+	STRETCH_INTERVAL_MIN_OPTIONS,
 	STATS_RETENTION_MS,
 	type BreakEvent,
 	type BreakStats,
@@ -100,6 +104,14 @@ export function normalizeSettings(raw: unknown): Settings {
 	};
 	const bool = (v: unknown, def: boolean): boolean => (typeof v === 'boolean' ? v : def);
 
+	/** Reminder schedules/durations are discrete dropdown choices; older or
+	 *  hand-edited values snap to the nearest offered option. */
+	const snap = (v: unknown, options: readonly number[], fallback: number): number => {
+		const n = Number(v);
+		if (!Number.isFinite(n)) return fallback;
+		return options.reduce((best, o) => (Math.abs(o - n) < Math.abs(best - n) ? o : best));
+	};
+
 	const isKnownPreset =
 		s.soundPreset === 'custom' || SOUND_PRESETS.some((p) => p.id === s.soundPreset);
 	const preset = isKnownPreset
@@ -119,18 +131,25 @@ export function normalizeSettings(raw: unknown): Settings {
 
 	return {
 		eyeEnabled: bool(s.eyeEnabled, fallback.eyeEnabled),
-		eyeIntervalMin: num(s.eyeIntervalMin, fallback.eyeIntervalMin, 1, 240),
-		eyeDurationSec: num(s.eyeDurationSec, fallback.eyeDurationSec, 5, 300),
+		eyeIntervalMin: snap(s.eyeIntervalMin, EYE_INTERVAL_MIN_OPTIONS, fallback.eyeIntervalMin),
+		eyeDurationSec: snap(s.eyeDurationSec, EYE_DURATION_SEC_OPTIONS, fallback.eyeDurationSec),
 		stretchEnabled: bool(s.stretchEnabled, fallback.stretchEnabled),
-		stretchIntervalMin: num(s.stretchIntervalMin, fallback.stretchIntervalMin, 1, 480),
-		stretchDurationSec: num(s.stretchDurationSec, fallback.stretchDurationSec, 10, 600),
+		stretchIntervalMin: snap(
+			s.stretchIntervalMin,
+			STRETCH_INTERVAL_MIN_OPTIONS,
+			fallback.stretchIntervalMin
+		),
+		stretchDurationSec: snap(
+			s.stretchDurationSec,
+			STRETCH_DURATION_SEC_OPTIONS,
+			fallback.stretchDurationSec
+		),
 		soundPreset: preset,
 		customSoundFile: preset === 'custom' ? customSoundFile : undefined,
 		soundVolume: num(s.soundVolume, fallback.soundVolume, 0.05, 1),
 		soundFadeIn: bool(s.soundFadeIn, fallback.soundFadeIn),
 		soundRepeat: num(s.soundRepeat, fallback.soundRepeat, 1, 5),
 		idleThresholdSec: num(s.idleThresholdSec, fallback.idleThresholdSec, 30, 3600),
-		awayResetMin: num(s.awayResetMin, fallback.awayResetMin, 1, 120),
 		overlayOpacity: num(s.overlayOpacity, fallback.overlayOpacity, 0.2, 1),
 		hud2x: bool(s.hud2x, fallback.hud2x),
 		statsRetention: retention

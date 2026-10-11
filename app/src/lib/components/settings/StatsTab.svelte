@@ -97,7 +97,7 @@
 							{#if item.type === 'eye'}
 								<span class="text-emerald-400 flex items-center gap-1.5 flex-shrink-0">
 									<Eye class="w-3.5 h-3.5" />
-									<span class="font-medium">Eye Reset</span>
+									<span class="font-medium">Eye's Break</span>
 								</span>
 							{:else if item.type === 'stretch'}
 								<span class="text-amber-400 flex items-center gap-1.5 flex-shrink-0">

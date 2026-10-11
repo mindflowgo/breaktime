@@ -113,6 +113,18 @@ describe('normalizeSettings', () => {
 		expect(s.overlayOpacity).toBe(1);
 	});
 
+	it('snaps reminder intervals and durations to the offered dropdown options', () => {
+		const s = normalizeSettings({
+			...DEFAULT_SETTINGS,
+			eyeDurationSec: 50,
+			stretchIntervalMin: 100,
+			stretchDurationSec: 210
+		});
+		expect(s.eyeDurationSec).toBe(60);
+		expect(s.stretchIntervalMin).toBe(90);
+		expect(s.stretchDurationSec).toBe(180);
+	});
+
 	it('falls back to the default preset for unknown ids', () => {
 		const s = normalizeSettings({ ...DEFAULT_SETTINGS, soundPreset: 'foghorn' });
 		expect(s.soundPreset).toBe(DEFAULT_SETTINGS.soundPreset);

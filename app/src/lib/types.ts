@@ -75,7 +75,6 @@ export interface Settings {
 	/** File name (in the app data dir) of the uploaded custom sound. */
 	customSoundFile?: string;
 	idleThresholdSec: number; // default 300 (5 min)
-	awayResetMin: number; // default 10 min
 	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)
 	hud2x: boolean; // 2× HUD mode (double-size eye & window)
 	/** How far back to keep break statistics; older events are pruned. */
@@ -83,6 +82,15 @@ export interface Settings {
 }
 
 export type StatsRetention = '1w' | '1m' | '6m' | 'forever';
+
+/**
+ * Reminder schedule / duration choices shown in settings. Persisted values
+ * are snapped to the nearest option so the dropdowns always match.
+ */
+export const EYE_INTERVAL_MIN_OPTIONS = [5, 10, 15, 20, 30, 60];
+export const EYE_DURATION_SEC_OPTIONS = [30, 60, 90];
+export const STRETCH_INTERVAL_MIN_OPTIONS = [15, 30, 45, 60, 90];
+export const STRETCH_DURATION_SEC_OPTIONS = [60, 90, 180, 300];
 
 export const STATS_RETENTION_MS: Record<Exclude<StatsRetention, 'forever'>, number> = {
 	'1w': 7 * 24 * 60 * 60 * 1000,
@@ -93,7 +101,7 @@ export const STATS_RETENTION_MS: Record<Exclude<StatsRetention, 'forever'>, numb
 export const DEFAULT_SETTINGS: Settings = {
 	eyeEnabled: true,
 	eyeIntervalMin: 20,
-	eyeDurationSec: 20,
+	eyeDurationSec: 30,
 	stretchEnabled: true,
 	stretchIntervalMin: 45,
 	stretchDurationSec: 60,
@@ -102,7 +110,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	soundFadeIn: true,
 	soundRepeat: 1,
 	idleThresholdSec: 300,
-	awayResetMin: 10,
 	overlayOpacity: 0.85,
 	hud2x: false,
 	statsRetention: 'forever'

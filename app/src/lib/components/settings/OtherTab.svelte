@@ -4,8 +4,21 @@
 	import { isTauriEnvironment } from '$lib/services/windowManager';
 	import { settingsStore } from '$lib/services/settingsStore.svelte';
 	import { timerManager } from '$lib/services/timerManager.svelte';
+	import {
+		EYE_DURATION_SEC_OPTIONS,
+		EYE_INTERVAL_MIN_OPTIONS,
+		STRETCH_DURATION_SEC_OPTIONS,
+		STRETCH_INTERVAL_MIN_OPTIONS
+	} from '$lib/types';
 	import SettingSlider from '$lib/components/SettingSlider.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
+
+	const selectCls =
+		'w-20 bg-zinc-900 border border-white/10 rounded-lg px-1.5 py-1 text-[11px] text-zinc-200 cursor-pointer focus:outline-none focus:border-emerald-500/40';
+
+	/** 60 → "1 min", 90 → "1.5 min", 300 → "5 min" */
+	const stretchDurationLabel = (sec: number): string =>
+		sec % 60 === 0 ? `${sec / 60} min` : `${(sec / 60).toFixed(1)} min`;
 
 	let launchAtLogin = $state(false);
 	let available = $state(false);
@@ -68,95 +81,98 @@
 		</div>
 
 		<div class="divide-y divide-white/5">
-			<div class="py-2.5 flex items-center justify-between gap-4">
+			<div class="py-2.5 flex items-center justify-between gap-3">
 				<div class="flex items-center gap-2 min-w-0">
 					<Eye class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-					<div class="min-w-0">
-						<span class="text-xs font-medium text-zinc-200">Eye Reset</span>
-						<p class="text-[11px] text-zinc-500">20-20-20 screen break to relax focus</p>
-					</div>
+					<span class="text-xs font-medium text-zinc-200 whitespace-nowrap">Eye Break</span>
 				</div>
-				<Toggle
-					checked={settingsStore.settings.eyeEnabled}
-					onChange={(v) => settingsStore.updateSettings({ eyeEnabled: v })}
-				/>
+				<div class="flex items-center gap-3 flex-shrink-0">
+					<select
+						title="How often to remind you"
+						class={selectCls}
+						value={settingsStore.settings.eyeEnabled
+							? settingsStore.settings.eyeIntervalMin
+							: 'off'}
+						onchange={(e) => {
+							const v = (e.target as HTMLSelectElement).value;
+							settingsStore.updateSettings(
+								v === 'off'
+									? { eyeEnabled: false }
+									: { eyeEnabled: true, eyeIntervalMin: Number(v) }
+							);
+						}}
+					>
+						<option value="off">Off</option>
+						{#each EYE_INTERVAL_MIN_OPTIONS as m (m)}
+							<option value={m}>{m} min</option>
+						{/each}
+					</select>
+					<label class="flex items-center gap-1.5">
+						<span class="text-[11px] text-zinc-500 whitespace-nowrap">Break Duration</span>
+						<select
+							class={selectCls}
+							value={settingsStore.settings.eyeDurationSec}
+							onchange={(e) =>
+								settingsStore.updateSettings({
+									eyeDurationSec: Number((e.target as HTMLSelectElement).value)
+								})}
+						>
+							{#each EYE_DURATION_SEC_OPTIONS as sec (sec)}
+								<option value={sec}>{sec} s</option>
+							{/each}
+						</select>
+					</label>
+				</div>
 			</div>
 
-			<div class="py-2.5">
-				<SettingSlider
-					label="Interval"
-					desc="How often to trigger reminder"
-					min={5}
-					max={60}
-					step={5}
-					value={settingsStore.settings.eyeIntervalMin}
-					accent="emerald"
-					format={(v) => `${v} min`}
-					onCommit={(v) => settingsStore.updateSettings({ eyeIntervalMin: v })}
-				/>
-			</div>
-
-			<div class="py-2.5">
-				<SettingSlider
-					label="Duration"
-					desc="Length of the guided break"
-					min={10}
-					max={60}
-					step={5}
-					value={settingsStore.settings.eyeDurationSec}
-					accent="emerald"
-					format={(v) => `${v} sec`}
-					onCommit={(v) => settingsStore.updateSettings({ eyeDurationSec: v })}
-				/>
-			</div>
-
-			<div class="py-2.5 flex items-center justify-between gap-4">
+			<div class="py-2.5 flex items-center justify-between gap-3">
 				<div class="flex items-center gap-2 min-w-0">
 					<Activity class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-					<div class="min-w-0">
-						<span class="text-xs font-medium text-zinc-200">Move Break</span>
-						<p class="text-[11px] text-zinc-500">Postural reset & light movement</p>
-					</div>
+					<span class="text-xs font-medium text-zinc-200 whitespace-nowrap">Move Break</span>
 				</div>
-				<Toggle
-					accent="amber"
-					checked={settingsStore.settings.stretchEnabled}
-					onChange={(v) => settingsStore.updateSettings({ stretchEnabled: v })}
-				/>
+				<div class="flex items-center gap-3 flex-shrink-0">
+					<select
+						title="How often to remind you"
+						class={selectCls}
+						value={settingsStore.settings.stretchEnabled
+							? settingsStore.settings.stretchIntervalMin
+							: 'off'}
+						onchange={(e) => {
+							const v = (e.target as HTMLSelectElement).value;
+							settingsStore.updateSettings(
+								v === 'off'
+									? { stretchEnabled: false }
+									: { stretchEnabled: true, stretchIntervalMin: Number(v) }
+							);
+						}}
+					>
+						<option value="off">Off</option>
+						{#each STRETCH_INTERVAL_MIN_OPTIONS as m (m)}
+							<option value={m}>{m} min</option>
+						{/each}
+					</select>
+					<label class="flex items-center gap-1.5">
+						<span class="text-[11px] text-zinc-500 whitespace-nowrap">Break Duration</span>
+						<select
+							class={selectCls}
+							value={settingsStore.settings.stretchDurationSec}
+							onchange={(e) =>
+								settingsStore.updateSettings({
+									stretchDurationSec: Number((e.target as HTMLSelectElement).value)
+								})}
+						>
+							{#each STRETCH_DURATION_SEC_OPTIONS as sec (sec)}
+								<option value={sec}>{stretchDurationLabel(sec)}</option>
+							{/each}
+						</select>
+					</label>
+				</div>
 			</div>
 
 			<div class="py-2.5">
 				<SettingSlider
-					label="Interval"
-					desc="How often to trigger reminder"
-					min={15}
-					max={120}
-					step={5}
-					value={settingsStore.settings.stretchIntervalMin}
-					accent="amber"
-					format={(v) => `${v} min`}
-					onCommit={(v) => settingsStore.updateSettings({ stretchIntervalMin: v })}
-				/>
-			</div>
-
-			<div class="py-2.5">
-				<SettingSlider
-					label="Duration"
-					desc="Length of the movement break"
-					min={30}
-					max={180}
-					step={15}
-					value={settingsStore.settings.stretchDurationSec}
-					accent="amber"
-					format={(v) => `${v} sec`}
-					onCommit={(v) => settingsStore.updateSettings({ stretchDurationSec: v })}
-				/>
-			</div>
-
-			<div class="py-2.5">
-				<SettingSlider
-					label="Idle Opacity"
-					desc="HUD transparency while idle — always 100% on hover and during breaks"
+					label="Overlay Opacity"
+					desc="Overlay transparency to appear less intrusive"
 					min={0.2}
 					max={1.0}
 					step={0.05}
@@ -203,20 +219,6 @@
 					accent="indigo"
 					format={(v) => `${Math.round(v / 60)} min`}
 					onCommit={(v) => settingsStore.updateSettings({ idleThresholdSec: v })}
-				/>
-			</div>
-
-			<div class="py-2.5">
-				<SettingSlider
-					label="Away Reset Threshold"
-					desc="If away for this duration or longer, reset timers on return"
-					min={5}
-					max={30}
-					step={1}
-					value={settingsStore.settings.awayResetMin}
-					accent="indigo"
-					format={(v) => `${v} min`}
-					onCommit={(v) => settingsStore.updateSettings({ awayResetMin: v })}
 				/>
 			</div>
 		</div>
