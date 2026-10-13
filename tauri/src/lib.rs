@@ -45,12 +45,10 @@ pub fn run() {
             // set_position during setup can fire it synchronously.
             manage_window_state(app, state.clone());
 
-            if let Some(ref _overlay) = overlay_win {
+            if let Some(ref overlay) = overlay_win {
+                let _ = native::configure_overlay_panel(overlay);
                 #[cfg(target_os = "macos")]
-                {
-                    let _ = native::configure_overlay_panel(_overlay);
-                    setup_macos_overlay_spaces(_overlay);
-                }
+                setup_macos_overlay_spaces(overlay);
             }
 
             if state.mode == "normal" {

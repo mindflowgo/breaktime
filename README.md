@@ -12,11 +12,12 @@ computer time.
 - **Frontend:** SvelteKit 5 + Tailwind (static adapter, no SSR) in `app/`
 - **Backend:** Tauri v2 (Rust) in `tauri/`
 - **Plugins:** `tauri-plugin-idlemonitor` (system idle detection),
-  `tauri-nspanel` + `window-vibrancy` (macOS floating overlay panel)
+  `tauri-nspanel` (macOS floating overlay panel; Windows uses a plain
+  transparent topmost window with tool-window styling — see `docs/ARCHITECTURE.md`)
 
 ## Development
 
-Prerequisites: [bun](https://bun.sh), a Rust toolchain, and macOS.
+Prerequisites: [bun](https://bun.sh) and a Rust toolchain (macOS or Windows).
 
 ```bash
 bun install          # root deps

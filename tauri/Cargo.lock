@@ -341,6 +341,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-idlemonitor",
  "windows 0.61.3",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

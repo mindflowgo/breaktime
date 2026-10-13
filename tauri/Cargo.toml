@@ -1,7 +1,7 @@
 [package]
 name = "breaktime"
 version = "0.1.0"
-description = "Breaktime Screen & Exercise Break Reminder"
+description = "Breaktime for Eye & Body Reminder"
 edition = "2021"
 
 [lib]
@@ -19,7 +19,7 @@ base64 = "0.22"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-dialog = "2"
-tauri-plugin-idlemonitor = "0.2.3"
+tauri-plugin-idlemonitor = "0.2.4"
 tauri-plugin-autostart = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -30,3 +30,9 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# tauri-plugin-idlemonitor 0.2.3 imports WNDCLASSW/RegisterClassW from
+# windows-sys's WindowsAndMessaging module but those items are gated behind
+# the Win32_Graphics_Gdi feature, which it expects some other crate in the
+# graph to enable. Nothing here does, so declare it ourselves to unify the
+# feature in and unbreak the Windows build.
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Gdi"] }

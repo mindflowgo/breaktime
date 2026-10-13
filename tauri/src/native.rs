@@ -157,8 +157,37 @@ pub fn configure_overlay_panel(window: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn configure_overlay_panel(_window: &WebviewWindow) -> Result<(), String> {
+/// Windows stand-in for the macOS NSPanel setup. The overlay is a plain
+/// borderless transparent Tauri window (see tauri.conf.json); this applies
+/// the panel chrome macOS gets for free:
+/// - set_focusable(false): clicking/dragging the HUD never steals focus from
+///   the active app (the NSPanel's NonactivatingPanel behaviour). tao maps
+///   this to WS_EX_NOACTIVATE in its own style computation, so it survives
+///   the style rewrites tao does on every flag change.
+/// - WS_EX_TOOLWINDOW: no Alt-Tab entry (IgnoresCycle). tao's skipTaskbar
+///   only deletes the taskbar tab via ITaskbarList; without this the HUD
+///   still cycles through Alt-Tab. Must be poked raw *after* tao's
+///   flag-driven rewrites (see show_overlay_panel ordering).
+#[cfg(target_os = "windows")]
+pub fn configure_overlay_panel<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    window.set_focusable(false).map_err(|e| e.to_string())?;
+
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    // Re-wrap the raw handle so we don't depend on which `windows`
+    // crate version tauri re-exports (same trick as set_opacity below).
+    let h = HWND(hwnd.0 as *mut _);
+    unsafe {
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW.0 as isize);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn configure_overlay_panel<R: tauri::Runtime>(_window: &WebviewWindow<R>) -> Result<(), String> {
     Ok(())
 }
 
@@ -172,8 +201,18 @@ pub fn show_overlay_panel<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), S
         }
     }
     if let Some(overlay) = app.get_webview_window("overlay") {
+        // Re-assert topmost on every show (the macOS branch re-sets the
+        // panel level) and don't focus: showing the HUD must not steal
+        // focus from the active app (non-activating panel behaviour).
+        let _ = overlay.set_always_on_top(true);
         overlay.show().map_err(|e| e.to_string())?;
-        let _ = overlay.set_focus();
+        // tao recomputes the window styles from its own flags on the calls
+        // above (apply_diff), so the tool-window chrome has to be re-applied
+        // *after* them or it gets wiped on every hide/show cycle.
+        #[cfg(target_os = "windows")]
+        {
+            let _ = configure_overlay_panel(&overlay);
+        }
     }
     Ok(())
 }
