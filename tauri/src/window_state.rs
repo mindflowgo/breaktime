@@ -459,6 +459,7 @@ pub fn enter_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, Strin
 
 #[tauri::command]
 pub fn exit_overlay_mode(app: tauri::AppHandle) -> Result<AppWindowState, String> {
+    let _ = restore_overlay_after_effect(app.clone());
     let (mut snapshot, already_normal) = {
         let Some(cache) = app.try_state::<WindowStateCache>() else {
             return Ok(AppWindowState::default());
@@ -530,6 +531,210 @@ pub fn native_overlay_start_drag(app: tauri::AppHandle) -> Result<bool, String> 
     Ok(false)
 }
 
+static IS_EXPAND_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayExpandBackup {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+static OVERLAY_BACKUP: Mutex<Option<OverlayExpandBackup>> = Mutex::new(None);
+
+pub fn is_expand_on() -> bool {
+    IS_EXPAND_ON.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Calculate target position for overlay expansion (settings menu or word effect).
+/// If placed on the right of the screen, expand window left. If placed on the left, expand right.
+/// If placed in the bottom half of the screen, expand upwards. If in top half, expand downwards.
+/// Clamps within the monitor bounds so the expanded window is always fully visible.
+pub fn calculate_expanded_position(
+    curr_x: i32,
+    curr_y: i32,
+    curr_w: i32,
+    curr_h: i32,
+    target_w: i32,
+    target_h: i32,
+    mon_rect: &MonitorRect,
+) -> (i32, i32) {
+    let delta_w = target_w - curr_w;
+    let delta_h = target_h - curr_h;
+    let mon_mid_x = mon_rect.x + mon_rect.width / 2;
+    let curr_mid_x = curr_x + curr_w / 2;
+    let mon_mid_y = mon_rect.y + mon_rect.height / 2;
+    let curr_mid_y = curr_y + curr_h / 2;
+
+    let target_x = if curr_mid_x >= mon_mid_x {
+        curr_x - delta_w
+    } else {
+        curr_x
+    };
+
+    let target_y = if curr_mid_y >= mon_mid_y {
+        curr_y - delta_h
+    } else {
+        curr_y
+    };
+
+    let max_x = mon_rect.x + (mon_rect.width - target_w).max(0);
+    let max_y = mon_rect.y + (mon_rect.height - target_h).max(0);
+    (target_x.clamp(mon_rect.x, max_x), target_y.clamp(mon_rect.y, max_y))
+}
+
+pub use calculate_expanded_position as calculate_effect_expansion;
+
+/// Generalized helper to expand the overlay window either by explicit dimensions
+/// (e.g. for settings menu: width, height) or by scale factor (e.g. for break effect).
+/// Direction-aware and clamps to monitor boundaries while locking window-state tracking.
+#[tauri::command]
+pub fn expand_overlay_window(
+    app: tauri::AppHandle,
+    width: Option<f64>,
+    height: Option<f64>,
+    scale: Option<f64>,
+) -> Result<(), String> {
+    let overlay_win = app.get_webview_window("overlay").ok_or("Overlay window not found")?;
+    let phys_pos = overlay_win.outer_position().map_err(|e| e.to_string())?;
+    let phys_size = overlay_win.outer_size().map_err(|e| e.to_string())?;
+    let win_scale = overlay_win.scale_factor().unwrap_or(1.0);
+    let curr_logical_w = phys_size.width as f64 / win_scale;
+    let curr_logical_h = phys_size.height as f64 / win_scale;
+
+    let (idle_w, idle_h) = idle_hud_logical_size(&app);
+
+    let mut backup_guard = OVERLAY_BACKUP.lock().map_err(|e| e.to_string())?;
+    if backup_guard.is_none() {
+        *backup_guard = Some(OverlayExpandBackup {
+            x: phys_pos.x as f64,
+            y: phys_pos.y as f64,
+            width: if curr_logical_w > idle_w * 1.5 { idle_w } else { curr_logical_w },
+            height: if curr_logical_h > idle_h * 1.5 { idle_h } else { curr_logical_h },
+        });
+    }
+    IS_EXPAND_ON.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(backup_guard);
+
+    let (target_logical_w, target_logical_h) = if let Some(s) = scale {
+        let factor = s.max(1.0);
+        (idle_w * factor, idle_h * factor)
+    } else {
+        (
+            width.unwrap_or(idle_w).max(idle_w),
+            height.unwrap_or(idle_h).max(idle_h),
+        )
+    };
+
+    let monitors = monitors_with_scale(&app);
+    let mon = monitors
+        .iter()
+        .find(|m| {
+            phys_pos.x >= m.rect.x
+                && phys_pos.x < m.rect.x + m.rect.width
+                && phys_pos.y >= m.rect.y
+                && phys_pos.y < m.rect.y + m.rect.height
+        })
+        .cloned()
+        .or_else(|| monitors.first().cloned())
+        .unwrap_or(MonitorInfo {
+            rect: MonitorRect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            scale: 1.0,
+        });
+
+    let mon_scale = mon.scale;
+    let target_phys_w = (target_logical_w * mon_scale) as i32;
+    let target_phys_h = (target_logical_h * mon_scale) as i32;
+    let curr_phys_w = phys_size.width as i32;
+    let curr_phys_h = phys_size.height as i32;
+
+    let (clamped_x, clamped_y) = calculate_expanded_position(
+        phys_pos.x,
+        phys_pos.y,
+        curr_phys_w,
+        curr_phys_h,
+        target_phys_w,
+        target_phys_h,
+        &mon.rect,
+    );
+
+    overlay_win
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            clamped_x,
+            clamped_y,
+        )))
+        .map_err(|e| e.to_string())?;
+
+    overlay_win
+        .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            target_logical_w,
+            target_logical_h,
+        )))
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Generalized helper to restore the overlay window back to compact idle dimensions
+/// and pre-expansion coordinates.
+#[tauri::command]
+pub fn restore_overlay_window(app: tauri::AppHandle) -> Result<(), String> {
+    let overlay_win = match app.get_webview_window("overlay") {
+        Some(w) => w,
+        None => return Ok(()),
+    };
+    let backup = {
+        let mut guard = OVERLAY_BACKUP.lock().map_err(|e| e.to_string())?;
+        guard.take()
+    };
+    let (idle_w, idle_h) = idle_hud_logical_size(&app);
+
+    if let Some(b) = backup {
+        let target_w = if (b.width - IDLE_HUD_WIDTH).abs() < 1.0 || (b.width - IDLE_HUD_2X_WIDTH).abs() < 1.0 {
+            idle_w
+        } else {
+            b.width
+        };
+        let target_h = if (b.height - IDLE_HUD_HEIGHT).abs() < 1.0 || (b.height - IDLE_HUD_2X_HEIGHT).abs() < 1.0 {
+            idle_h
+        } else {
+            b.height
+        };
+        let _ = overlay_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(target_w, target_h)));
+        let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            b.x as i32,
+            b.y as i32,
+        )));
+    } else {
+        let _ = overlay_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(idle_w, idle_h)));
+        let state = cached_window_state(&app);
+        let (clamped_x, clamped_y) =
+            clamp_overlay_position(&app, state.minimalist.x, state.minimalist.y);
+        let _ = overlay_win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            clamped_x as i32,
+            clamped_y as i32,
+        )));
+    }
+    IS_EXPAND_ON.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn expand_overlay_for_effect(app: tauri::AppHandle, scale: Option<f64>) -> Result<(), String> {
+    expand_overlay_window(app, None, None, scale)
+}
+
+#[tauri::command]
+pub fn restore_overlay_after_effect(app: tauri::AppHandle) -> Result<(), String> {
+    restore_overlay_window(app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +782,50 @@ mod tests {
     #[test]
     fn returns_none_when_not_on_any_monitor() {
         assert!(clamp_rect(9000, 9000, 300, 56, MONITORS).is_none());
+    }
+
+    #[test]
+    fn expands_left_when_on_right_half() {
+        let mon = MonitorRect { x: 0, y: 0, width: 1920, height: 1080 };
+        // Overlay placed near right edge (x = 1800, width = 104)
+        // Center x = 1852 >= 960 (right half)
+        // Target width = 520, height = 240
+        // delta_w = 416
+        // target_x should be 1800 - 416 = 1384, keeping right edge at 1904
+        let (x, y) = calculate_effect_expansion(1800, 100, 104, 48, 520, 240, &mon);
+        assert_eq!(x, 1384);
+        assert_eq!(y, 100);
+    }
+
+    #[test]
+    fn expands_right_when_on_left_half() {
+        let mon = MonitorRect { x: 0, y: 0, width: 1920, height: 1080 };
+        // Overlay placed on left side (x = 100, width = 104)
+        // Center x = 152 < 960 (left half)
+        let (x, y) = calculate_effect_expansion(100, 100, 104, 48, 520, 240, &mon);
+        assert_eq!(x, 100);
+        assert_eq!(y, 100);
+    }
+
+    #[test]
+    fn expands_up_when_on_bottom_half() {
+        let mon = MonitorRect { x: 0, y: 0, width: 1920, height: 1080 };
+        // Overlay placed near bottom (y = 1000, height = 48)
+        // Center y = 1024 >= 540 (bottom half)
+        // Target height = 240, delta_h = 192
+        // target_y = 1000 - 192 = 808
+        let (x, y) = calculate_effect_expansion(100, 1000, 104, 48, 520, 240, &mon);
+        assert_eq!(x, 100);
+        assert_eq!(y, 808);
+    }
+
+    #[test]
+    fn clamps_to_monitor_bounds_if_overflowing() {
+        let mon = MonitorRect { x: 0, y: 0, width: 1920, height: 1080 };
+        // Overlay at extreme right corner: x = 1900
+        // Without clamp: 1900 - 416 = 1484. Max x = 1920 - 520 = 1400.
+        let (x, y) = calculate_effect_expansion(1900, 100, 104, 48, 520, 240, &mon);
+        assert_eq!(x, 1400);
+        assert_eq!(y, 100);
     }
 }

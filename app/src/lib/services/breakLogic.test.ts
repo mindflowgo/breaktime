@@ -143,6 +143,23 @@ describe('normalizeSettings', () => {
 		expect(normalizeSettings({ statsRetention: 'bogus' }).statsRetention).toBe('forever');
 		expect(normalizeSettings({}).statsRetention).toBe('forever');
 	});
+
+	it('normalizes effectWords properly', () => {
+		expect(normalizeSettings({ effectWords: ['rest', ' eyes '] }).effectWords).toEqual(['REST', 'EYES']);
+		expect(normalizeSettings({ effectWords: 'pause, breathe' }).effectWords).toEqual(['PAUSE', 'BREATHE']);
+		expect(normalizeSettings({ effectWords: [] }).effectWords).toEqual(['BREAK', 'TIME']);
+		expect(normalizeSettings({ effectWords: '   ' }).effectWords).toEqual(['BREAK', 'TIME']);
+		expect(normalizeSettings({}).effectWords).toEqual(['BREAK', 'TIME']);
+	});
+
+	it('normalizes effectWordDurationSec by snapping to 1, 2, or 3', () => {
+		expect(normalizeSettings({ effectWordDurationSec: 1 }).effectWordDurationSec).toBe(1);
+		expect(normalizeSettings({ effectWordDurationSec: 2 }).effectWordDurationSec).toBe(2);
+		expect(normalizeSettings({ effectWordDurationSec: 3 }).effectWordDurationSec).toBe(3);
+		expect(normalizeSettings({ effectWordDurationSec: 0 }).effectWordDurationSec).toBe(1);
+		expect(normalizeSettings({ effectWordDurationSec: 5 }).effectWordDurationSec).toBe(3);
+		expect(normalizeSettings({ effectWordDurationSec: 'invalid' }).effectWordDurationSec).toBe(1);
+	});
 });
 
 describe('pruneStatsToRetention', () => {

@@ -7,37 +7,43 @@
 	import { stopSound } from '$lib/services/soundPlayer';
 	import { EV_OPEN_TAB } from '$lib/services/events';
 	import SoundsTab from '$lib/components/settings/SoundsTab.svelte';
-	import OtherTab from '$lib/components/settings/OtherTab.svelte';
+	import MainTab from '$lib/components/settings/MainTab.svelte';
 	import StatsTab from '$lib/components/settings/StatsTab.svelte';
 
-	const TAB_IDS = ['sounds', 'other', 'stats'] as const;
+	const TAB_IDS = ['main', 'sounds', 'stats'] as const;
 	type TabId = (typeof TAB_IDS)[number];
 
-	const TAB_META: Record<TabId, { icon: typeof Volume2; label: string }> = {
+	const TAB_META: Record<TabId, { icon: typeof Settings2; label: string }> = {
+		main: { icon: Settings2, label: 'Main' },
 		sounds: { icon: Volume2, label: 'Sounds' },
-		other: { icon: Settings2, label: 'Other' },
 		stats: { icon: BarChart3, label: 'Stats' }
 	};
 
-	let currentTab = $state<TabId>('sounds');
+	let currentTab = $state<TabId>('main');
 
-	function isTabId(v: unknown): v is TabId {
-		return typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v);
+	function normalizeTabId(v: unknown): TabId | null {
+		if (v === 'other') return 'main';
+		if (typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v)) {
+			return v as TabId;
+		}
+		return null;
 	}
 
 	onMount(() => {
 		const savedTab =
 			typeof localStorage !== 'undefined' ? localStorage.getItem('breaktime_active_tab') : null;
-		if (isTabId(savedTab)) {
-			currentTab = savedTab;
+		const normalized = normalizeTabId(savedTab);
+		if (normalized) {
+			currentTab = normalized;
 		}
 
 		settingsStore.init();
 		timerManager.init();
 
 		const unlistenPromise = listenTauriEvent<unknown>(EV_OPEN_TAB, (tab) => {
-			if (isTabId(tab)) {
-				currentTab = tab;
+			const normalized = normalizeTabId(tab);
+			if (normalized) {
+				currentTab = normalized;
 			}
 		});
 
@@ -121,10 +127,10 @@
 
 	<!-- Main Content Area -->
 	<main class="flex-1 overflow-y-auto px-5 py-3">
-		{#if currentTab === 'sounds'}
+		{#if currentTab === 'main'}
+			<MainTab />
+		{:else if currentTab === 'sounds'}
 			<SoundsTab />
-		{:else if currentTab === 'other'}
-			<OtherTab />
 		{:else}
 			<StatsTab />
 		{/if}

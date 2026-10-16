@@ -14,6 +14,8 @@
 	import {
 		exitOverlayMode,
 		setOverlayWindowSize,
+		expandOverlayWindow,
+		restoreOverlayWindow,
 		setOverlayOpacity,
 		startDragging,
 		exitApp,
@@ -50,7 +52,7 @@
 	let stretchFigClass = $derived(hudScale === 2 ? 'w-[62px] h-[62px]' : 'w-[34px] h-[34px]');
 
 	async function resizeToIdle() {
-		await setOverlayWindowSize(idleSize.width, idleSize.height);
+		await restoreOverlayWindow();
 	}
 
 	onMount(() => {
@@ -76,7 +78,7 @@
 		const handlePointerDown = async (e: PointerEvent) => {
 			if (e.button !== 0) return;
 			const target = e.target as HTMLElement;
-			if (target.closest('button, .menu-container, .menu-dropdown')) {
+			if (target.closest('button, .menu-container, .menu-dropdown, .effect-container')) {
 				return;
 			}
 			dragStartPos = { x: e.screenX, y: e.screenY };
@@ -187,7 +189,7 @@
 	// the settings/stats window is open; otherwise the user's default.
 	let isNormalMode = $state(false);
 	let hudOpacity = $derived.by(() => {
-		if (isMouseOver || timerManager.activeBreak || isNormalMode) return 1;
+		if (isMouseOver || timerManager.activeBreak || timerManager.isEffectOn || isNormalMode) return 1;
 		return settingsStore.settings.overlayOpacity ?? 0.85;
 	});
 
@@ -197,17 +199,17 @@
 
 	async function openMenu() {
 		isMenuOpen = true;
-		// Never shrink below the idle size when expanding for the menu.
-		await setOverlayWindowSize(
-			Math.max(MENU_EXPANDED_WIDTH, idleSize.width),
-			Math.max(MENU_EXPANDED_HEIGHT, idleSize.height)
-		);
+		// Direction-aware expansion (expands left if on right half, up if in bottom half)
+		await expandOverlayWindow({
+			width: Math.max(MENU_EXPANDED_WIDTH, idleSize.width),
+			height: Math.max(MENU_EXPANDED_HEIGHT, idleSize.height)
+		});
 	}
 
 	async function closeMenu() {
 		if (!isMenuOpen) return;
 		isMenuOpen = false;
-		await resizeToIdle();
+		await restoreOverlayWindow();
 	}
 
 	/** Toggle 2× HUD mode — close the menu; the watcher effect below resizes. */
@@ -247,12 +249,13 @@
 	// firing or the ⋮ menu (Eye/Stretch Now); an active break completes via
 	// Enter and skips via the ✕ button or Esc.
 
-	async function handleOpenSettings(tab: 'sounds' | 'other' | 'stats' = 'other') {
+	async function handleOpenSettings(tab: 'main' | 'sounds' | 'stats' | 'other' = 'main') {
 		await closeMenu();
+		const normalized = tab === 'other' ? 'main' : tab;
 		if (typeof localStorage !== 'undefined') {
-			localStorage.setItem('breaktime_active_tab', tab);
+			localStorage.setItem('breaktime_active_tab', normalized);
 		}
-		await emitTauriEvent(EV_OPEN_TAB, tab);
+		await emitTauriEvent(EV_OPEN_TAB, normalized);
 		await exitOverlayMode();
 	}
 
@@ -278,13 +281,20 @@
 
 	function handleGlobalKeyDown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
-			if (isMenuOpen) {
+			if (timerManager.isEffectOn) {
+				timerManager.cancelEffect();
+				if (timerManager.activeBreak) {
+					void timerManager.skipBreak();
+				}
+			} else if (isMenuOpen) {
 				void closeMenu();
 			} else if (timerManager.activeBreak) {
 				void timerManager.skipBreak();
 			}
 		} else if (e.key === 'Enter') {
-			if (timerManager.activeBreak && !isMenuOpen) {
+			if (timerManager.isEffectOn) {
+				timerManager.cancelEffect();
+			} else if (timerManager.activeBreak && !isMenuOpen) {
 				e.preventDefault();
 				void timerManager.completeBreak();
 			}
@@ -362,184 +372,207 @@
 	class="overlay-container relative w-full h-full box-border select-none overflow-hidden"
 	data-tauri-drag-region
 >
-	<!-- Subtle outline of the overlay while hovered (llm_gauge style) -->
-	{#if isMouseOver}
+	{#if timerManager.isEffectOn}
+		<!-- 5× Expanded Announcement Effect (transparent background, just the shimmering word) -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="pointer-events-none absolute inset-0 rounded-2xl border border-white/20 bg-white/[0.04]"
-		></div>
-	{/if}
-	<!-- HUD Row: [eye (time tucked under its curve) | person (stretch time below) / skip] -->
-	<div
-		class="hud-row flex items-center justify-between w-full h-full px-1.5 gap-1 box-border"
-		data-tauri-drag-region
-	>
-		<!-- Center: eye (idle + eye breaks) or the stretch figure; time sits
-		     directly below, just under the bottom curve of the eye. -->
+			role="button"
+			tabindex="0"
+			onclick={() => timerManager.cancelEffect()}
+			title="Click or press Esc to dismiss"
+			class="effect-container absolute inset-0 flex items-center justify-center p-2 bg-transparent border-0 select-none overflow-hidden cursor-pointer"
+		>
+			{#key timerManager.currentEffectWord}
+				<div class="word-card flex items-center justify-center z-10 animate-word-pop px-2 w-full">
+					<h1
+						class="text-[min(18vw,88px)] font-black uppercase tracking-wider text-center whitespace-nowrap select-none filter {timerManager.activeBreak === 'stretch' ? 'text-shimmer-amber' : 'text-shimmer-emerald'}"
+					>
+						{timerManager.currentEffectWord ?? ''}
+					</h1>
+				</div>
+			{/key}
+		</div>
+	{:else}
+		<!-- Subtle outline of the overlay while hovered (llm_gauge style) -->
+		{#if isMouseOver}
+			<div
+				class="pointer-events-none absolute inset-0 rounded-2xl border border-white/20 bg-white/[0.04]"
+			></div>
+		{/if}
+		<!-- HUD Row: [eye (time tucked under its curve) | person (stretch time below) / skip] -->
 		<div
-			class="relative flex flex-col items-center justify-center flex-1 min-w-0 self-stretch py-0.5"
-			title={centerTooltip}
+			class="hud-row flex items-center justify-between w-full px-1.5 gap-1 box-border"
+			style="height: {idleSize.height}px"
 			data-tauri-drag-region
 		>
-			{#if timerManager.activeBreak === 'stretch'}
-				<StretchFigure progress={breakProgress} class="{stretchFigClass} text-amber-300" />
-			{:else}
-				<EyeTimerSvg
-					progress={breakProgress}
-					droop={eyeDroop}
-					isBreakActive={timerManager.activeBreak === 'eye'}
-					isIdle={timerManager.isIdle}
-					class={eyeClass}
-				/>
-			{/if}
-			<span
-				class="{timeTuckClass} {timeClass} font-mono font-semibold tracking-tight leading-none {timeDisplay.accent} drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] select-none"
+			<!-- Center: eye (idle + eye breaks) or the stretch figure; time sits
+			     directly below, just under the bottom curve of the eye. -->
+			<div
+				class="relative flex flex-col items-center justify-center flex-1 min-w-0 self-stretch py-0.5"
+				title={centerTooltip}
 				data-tauri-drag-region
 			>
-				{timeDisplay.text}
-			</span>
-		</div>
+				{#if timerManager.activeBreak === 'stretch'}
+					<StretchFigure progress={breakProgress} class="{stretchFigClass} text-amber-300" />
+				{:else}
+					<EyeTimerSvg
+						progress={breakProgress}
+						droop={eyeDroop}
+						isBreakActive={timerManager.activeBreak === 'eye'}
+						isIdle={timerManager.isIdle}
+						class={eyeClass}
+					/>
+				{/if}
+				<span
+					class="{timeTuckClass} {timeClass} font-mono font-semibold tracking-tight leading-none {timeDisplay.accent} drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] select-none"
+					data-tauri-drag-region
+				>
+					{timeDisplay.text}
+				</span>
+			</div>
 
-		<!-- Right: stretch person with its countdown below (idle); skip button
-		     (breaks); menu toggle always at the far right. -->
-		<div class="flex items-center gap-0.5 flex-shrink-0 no-drag self-stretch">
-			{#if timerManager.activeBreak}
-				<button
-					type="button"
-					onclick={() => timerManager.skipBreak()}
-					title="Skip break (Esc)"
-					class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-rose-300 hover:bg-rose-500/15 active:scale-95 transition-all cursor-pointer no-drag"
-				>
-					<span class="text-[13px] font-bold leading-none">✕</span>
-				</button>
-			{:else if settingsStore.settings.stretchEnabled}
-				<!-- Subtle grey standing person: display-only (breaks start from the
-				     timer or the ⋮ menu, never from pressing the person). -->
-				<div
-					class="flex flex-col items-center justify-center gap-0.5 px-0.5 h-full text-zinc-500 no-drag"
-					title="Next stretch break in {stretchTimeDisplay}"
-				>
-					<!-- Subtle grey standing person -->
-					<svg
-						viewBox="0 0 24 24"
-						class={personClass}
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
+			<!-- Right: stretch person with its countdown below (idle); skip button
+			     (breaks); menu toggle always at the far right. -->
+			<div class="flex items-center gap-0.5 flex-shrink-0 no-drag self-stretch">
+				{#if timerManager.activeBreak}
+					<button
+						type="button"
+						onclick={() => timerManager.skipBreak()}
+						title="Skip break (Esc)"
+						class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-rose-300 hover:bg-rose-500/15 active:scale-95 transition-all cursor-pointer no-drag"
 					>
-						<circle cx="12" cy="5" r="1" />
-						<path d="m9 20 3-6 3 6" />
-						<path d="m6 8 6 2 6-2" />
-						<path d="M12 10v4" />
-					</svg>
-					{#if stretchTimeDisplay}
-						<span class="{personTimeClass} font-mono font-medium leading-none">{stretchTimeDisplay}</span>
-					{/if}
-				</div>
-			{/if}
+						<span class="text-[13px] font-bold leading-none">✕</span>
+					</button>
+				{:else if settingsStore.settings.stretchEnabled}
+					<!-- Subtle grey standing person: display-only (breaks start from the
+					     timer or the ⋮ menu, never from pressing the person). -->
+					<div
+						class="flex flex-col items-center justify-center gap-0.5 px-0.5 h-full text-zinc-500 no-drag"
+						title="Next stretch break in {stretchTimeDisplay}"
+					>
+						<!-- Subtle grey standing person -->
+						<svg
+							viewBox="0 0 24 24"
+							class={personClass}
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<circle cx="12" cy="5" r="1" />
+							<path d="m9 20 3-6 3 6" />
+							<path d="m6 8 6 2 6-2" />
+							<path d="M12 10v4" />
+						</svg>
+						{#if stretchTimeDisplay}
+							<span class="{personTimeClass} font-mono font-medium leading-none">{stretchTimeDisplay}</span>
+						{/if}
+					</div>
+				{/if}
 
-			<div class="relative menu-container no-drag flex-shrink-0">
-				<button
-					type="button"
-					onclick={toggleMenu}
-					title="Menu"
-					class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-				>
-					<MoreVertical class="w-4 h-4" />
-				</button>
+				<div class="relative menu-container no-drag flex-shrink-0">
+					<button
+						type="button"
+						onclick={toggleMenu}
+						title="Menu"
+						class="flex items-center justify-center w-6 h-7 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
+					>
+						<MoreVertical class="w-4 h-4" />
+					</button>
+				</div>
 			</div>
 		</div>
-	</div>
 
-	<!-- Floating Dropdown Menu -->
-	{#if isMenuOpen}
-		<div
-			class="menu-dropdown absolute right-1.5 top-[46px] w-[186px] rounded-2xl border border-white/15 bg-zinc-950/95 backdrop-blur-xl shadow-2xl p-1.5 z-50 flex flex-col gap-0.5 no-drag"
-		>
-			<button
-				type="button"
-				onclick={() => handleOpenSettings('other')}
-				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+		<!-- Floating Dropdown Menu -->
+		{#if isMenuOpen}
+			<div
+				class="menu-dropdown absolute right-1.5 top-[46px] w-[186px] rounded-2xl border border-white/15 bg-zinc-950/95 backdrop-blur-xl shadow-2xl p-1.5 z-50 flex flex-col gap-0.5 no-drag"
 			>
-				<Settings class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
-				<span class="font-medium">Settings</span>
-			</button>
+				<button
+					type="button"
+					onclick={() => handleOpenSettings('main')}
+					class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					<Settings class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+					<span class="font-medium">Settings</span>
+				</button>
 
-			<button
-				type="button"
-				onclick={() => handleOpenSettings('stats')}
-				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
-			>
-				<BarChart3 class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-				<span class="font-medium">Stats Tracker</span>
-			</button>
+				<button
+					type="button"
+					onclick={() => handleOpenSettings('stats')}
+					class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					<BarChart3 class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+					<span class="font-medium">Stats Tracker</span>
+				</button>
 
-			<div class="border-t border-white/10 my-0.5"></div>
+				<div class="border-t border-white/10 my-0.5"></div>
 
-			<button
-				type="button"
-				onclick={handleTriggerEye}
-				class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
-			>
-				<div class="flex items-center gap-2 min-w-0">
-					<Eye class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-					<span class="font-medium truncate">Eye Break Now</span>
-				</div>
-				<span class="text-[10px] text-emerald-400/70 font-mono">{timerManager.durationFor('eye')}s</span>
-			</button>
+				<button
+					type="button"
+					onclick={handleTriggerEye}
+					class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-emerald-300 hover:text-emerald-100 hover:bg-emerald-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					<div class="flex items-center gap-2 min-w-0">
+						<Eye class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+						<span class="font-medium truncate">Eye Break Now</span>
+					</div>
+					<span class="text-[10px] text-emerald-400/70 font-mono">{timerManager.durationFor('eye')}s</span>
+				</button>
 
-			<button
-				type="button"
-				onclick={handleTriggerStretch}
-				class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-amber-300 hover:text-amber-100 hover:bg-amber-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
-			>
-				<div class="flex items-center gap-2 min-w-0">
-					<Activity class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-					<span class="font-medium truncate">Stretch Now</span>
-				</div>
-				<span class="text-[10px] text-amber-400/70 font-mono">{timerManager.durationFor('stretch')}s</span>
-			</button>
+				<button
+					type="button"
+					onclick={handleTriggerStretch}
+					class="flex items-center justify-between w-full px-2.5 py-1.5 text-xs text-amber-300 hover:text-amber-100 hover:bg-amber-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					<div class="flex items-center gap-2 min-w-0">
+						<Activity class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+						<span class="font-medium truncate">Stretch Now</span>
+					</div>
+					<span class="text-[10px] text-amber-400/70 font-mono">{timerManager.durationFor('stretch')}s</span>
+				</button>
 
-			<button
-				type="button"
-				onclick={handleTogglePause}
-				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
-			>
-				{#if timerManager.isPaused}
-					<Play class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-					<span class="font-medium">Resume Timers</span>
-				{:else}
-					<PauseIcon class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-					<span class="font-medium">Pause Timers</span>
-				{/if}
-			</button>
-
-			<button
-				type="button"
-				onclick={handleToggle2x}
-				class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
-				title="Double the HUD size (window, eye and text)"
-			>
-				<span class="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center">
-					{#if settingsStore.settings.hud2x}
-						<Check class="w-3.5 h-3.5 text-sky-400" />
+				<button
+					type="button"
+					onclick={handleTogglePause}
+					class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					{#if timerManager.isPaused}
+						<Play class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+						<span class="font-medium">Resume Timers</span>
+					{:else}
+						<PauseIcon class="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+						<span class="font-medium">Pause Timers</span>
 					{/if}
-				</span>
-				<span class="font-medium">2× Size</span>
-			</button>
+				</button>
 
-			<div class="border-t border-white/10 my-0.5"></div>
+				<button
+					type="button"
+					onclick={handleToggle2x}
+					class="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-left no-drag"
+					title="Double the HUD size (window, eye and text)"
+				>
+					<span class="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center">
+						{#if settingsStore.settings.hud2x}
+							<Check class="w-3.5 h-3.5 text-sky-400" />
+						{/if}
+					</span>
+					<span class="font-medium">2× Size</span>
+				</button>
 
-			<button
-				type="button"
-				onclick={handleQuit}
-				class="flex items-center gap-2.5 w-full px-2.5 py-2 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
-			>
-				<Power class="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
-				<span class="font-medium">Quit Breaktime</span>
-			</button>
-		</div>
+				<div class="border-t border-white/10 my-0.5"></div>
+
+				<button
+					type="button"
+					onclick={handleQuit}
+					class="flex items-center gap-2.5 w-full px-2.5 py-2 text-xs text-rose-400 hover:text-rose-200 hover:bg-rose-500/15 rounded-xl transition-colors cursor-pointer text-left no-drag"
+				>
+					<Power class="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+					<span class="font-medium">Quit Breaktime</span>
+				</button>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -587,5 +620,69 @@
 			opacity: 1;
 			transform: scale(1) translateY(0);
 		}
+	}
+
+	@keyframes shimmer {
+		0% {
+			background-position: -200% 0;
+		}
+		100% {
+			background-position: 200% 0;
+		}
+	}
+
+	@keyframes wordPop {
+		0% {
+			transform: scale(0.88);
+			opacity: 0.6;
+		}
+		50% {
+			transform: scale(1.05);
+			opacity: 1;
+		}
+		100% {
+			transform: scale(1);
+			opacity: 1;
+		}
+	}
+
+	.animate-word-pop {
+		animation: wordPop 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+	}
+
+	.text-shimmer-emerald,
+	.text-glisten-emerald {
+		background: linear-gradient(
+			110deg,
+			#10b981 0%,
+			#34d399 22%,
+			#ffffff 50%,
+			#34d399 78%,
+			#10b981 100%
+		);
+		background-size: 250% 100%;
+		background-clip: text;
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		animation: shimmer 1.1s linear infinite;
+		filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.95)) drop-shadow(0 0 24px rgba(52, 211, 153, 0.8));
+	}
+
+	.text-shimmer-amber,
+	.text-glisten-amber {
+		background: linear-gradient(
+			110deg,
+			#d97706 0%,
+			#fbbf24 22%,
+			#ffffff 50%,
+			#fbbf24 78%,
+			#d97706 100%
+		);
+		background-size: 250% 100%;
+		background-clip: text;
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		animation: shimmer 1.1s linear infinite;
+		filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.95)) drop-shadow(0 0 24px rgba(245, 158, 11, 0.8));
 	}
 </style>

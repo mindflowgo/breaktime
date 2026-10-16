@@ -128,12 +128,14 @@ pub fn configure_overlay_panel(window: &WebviewWindow) -> Result<(), String> {
     handler.window_did_move(move |_notification| {
         let app_handle = app_move.clone();
         if let Some(overlay) = app_handle.get_webview_window("overlay") {
-            if let Ok(phys_pos) = overlay.outer_position() {
-                let (x, y) = (phys_pos.x as f64, phys_pos.y as f64);
-                crate::window_state::mutate_window_state(&app_handle, |state| {
-                    state.minimalist.x = Some(x);
-                    state.minimalist.y = Some(y);
-                });
+            if !crate::window_state::is_expand_on() {
+                if let Ok(phys_pos) = overlay.outer_position() {
+                    let (x, y) = (phys_pos.x as f64, phys_pos.y as f64);
+                    crate::window_state::mutate_window_state(&app_handle, |state| {
+                        state.minimalist.x = Some(x);
+                        state.minimalist.y = Some(y);
+                    });
+                }
             }
         }
     });

@@ -77,6 +77,10 @@ export interface Settings {
 	idleThresholdSec: number; // default 300 (5 min)
 	overlayOpacity: number; // 0.2 to 1.0 (default 0.85)
 	hud2x: boolean; // 2× HUD mode (double-size eye & window)
+	/** Words flashed across 5× expanded overlay at break start. */
+	effectWords: string[];
+	/** Duration in seconds to show each announcement word (1, 2, or 3). */
+	effectWordDurationSec: number;
 	/** How far back to keep break statistics; older events are pruned. */
 	statsRetention: StatsRetention;
 }
@@ -91,6 +95,7 @@ export const EYE_INTERVAL_MIN_OPTIONS = [5, 10, 15, 20, 30, 60];
 export const EYE_DURATION_SEC_OPTIONS = [30, 60, 90];
 export const STRETCH_INTERVAL_MIN_OPTIONS = [15, 30, 45, 60, 90];
 export const STRETCH_DURATION_SEC_OPTIONS = [60, 90, 180, 300];
+export const EFFECT_WORD_DURATION_SEC_OPTIONS = [1, 2, 3];
 
 export const STATS_RETENTION_MS: Record<Exclude<StatsRetention, 'forever'>, number> = {
 	'1w': 7 * 24 * 60 * 60 * 1000,
@@ -112,6 +117,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	idleThresholdSec: 300,
 	overlayOpacity: 0.85,
 	hud2x: false,
+	effectWords: ['BREAK', 'TIME'],
+	effectWordDurationSec: 1,
 	statsRetention: 'forever'
 };
 
@@ -164,7 +171,8 @@ export interface TimerCommand {
 		| 'complete-break'
 		| 'skip-break'
 		| 'reset-timers'
-		| 'reset-timer';
+		| 'reset-timer'
+		| 'preview-effect';
 	type?: BreakType;
 }
 

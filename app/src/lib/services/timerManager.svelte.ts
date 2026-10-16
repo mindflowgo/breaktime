@@ -7,6 +7,8 @@ import {
 	isTauriEnvironment,
 	enterOverlayMode,
 	setOverlayWindowSize,
+	expandOverlayWindow,
+	restoreOverlayWindow,
 	tauriInvoke,
 	IDLE_HUD_WIDTH,
 	IDLE_HUD_HEIGHT
@@ -57,6 +59,12 @@ class TimerManager {
 	isPaused = $state(false);
 	isIdle = $state(false);
 	activeBreak = $state<BreakType | null>(null);
+
+	// 5× Word Announcement Effect
+	isEffectOn = $state(false);
+	currentEffectWord = $state<string | null>(null);
+	effectWordIndex = $state(0);
+	private effectAbortController: AbortController | null = null;
 
 	// Time remaining in seconds
 	eyeTimeRemaining = $state(DEFAULT_SETTINGS.eyeIntervalMin * 60);
@@ -291,6 +299,9 @@ class TimerManager {
 					this.resetTimer(cmd.type);
 				}
 				break;
+			case 'preview-effect':
+				void this.previewEffect();
+				break;
 		}
 	}
 
@@ -513,6 +524,7 @@ class TimerManager {
 	 * a double-click or a tick racing a slow stats write cannot double-record.
 	 */
 	private claimActiveBreak(): BreakType | null {
+		this.cancelEffect();
 		const type = this.activeBreak;
 		if (!type || type === 'away') return null;
 		this.activeBreak = null;
@@ -552,10 +564,6 @@ class TimerManager {
 		// Freeze reminder countdowns while the break is underway
 		this.freezeTimers(now);
 
-		// No window resize here: break UI renders inside the existing
-		// idle-sized window. Resizing the macOS panel mid-session produces
-		// a visible white outline flash on every break.
-
 		// Play the start-of-break chime (once, from the authoritative master)
 		playSound(
 			settingsStore.settings.soundPreset,
@@ -565,6 +573,9 @@ class TimerManager {
 		);
 
 		this.emitStateSync();
+
+		// Trigger the 5× overlay word announcement effect
+		void this.playBreakEffect();
 	}
 
 	async completeBreak() {
@@ -737,7 +748,81 @@ class TimerManager {
 		this.emitStateSync();
 	}
 
+	/**
+	 * Play the 5× expanded word announcement effect at the start of a break.
+	 * Flashes each configured word for ~1000ms.
+	 */
+	async playBreakEffect(customWords?: string[]) {
+		this.cancelEffect();
+		const ac = new AbortController();
+		this.effectAbortController = ac;
+
+		const rawWords = customWords ?? settingsStore.settings.effectWords;
+		const words = Array.isArray(rawWords) && rawWords.length > 0 ? rawWords : ['BREAK', 'TIME'];
+		const durationSec = Math.max(
+			1,
+			Math.min(3, settingsStore.settings.effectWordDurationSec || 1)
+		);
+		const durationMs = durationSec * 1000;
+
+		try {
+			await expandOverlayWindow({ scale: 5 });
+			if (ac.signal.aborted) return;
+
+			this.isEffectOn = true;
+
+			for (let i = 0; i < words.length; i++) {
+				if (ac.signal.aborted) break;
+				this.effectWordIndex = i;
+				this.currentEffectWord = words[i];
+
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(resolve, durationMs);
+					ac.signal.addEventListener(
+						'abort',
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true }
+					);
+				});
+			}
+		} catch (err) {
+			console.warn('[TimerManager] playBreakEffect error:', err);
+		} finally {
+			if (this.effectAbortController === ac) {
+				this.effectAbortController = null;
+			}
+			this.isEffectOn = false;
+			this.currentEffectWord = null;
+			await restoreOverlayWindow();
+		}
+	}
+
+	cancelEffect() {
+		if (this.effectAbortController) {
+			this.effectAbortController.abort();
+			this.effectAbortController = null;
+		}
+		if (this.isEffectOn) {
+			this.isEffectOn = false;
+			this.currentEffectWord = null;
+			void restoreOverlayWindow();
+		}
+	}
+
+	async previewEffect(customWords?: string[]) {
+		if (!this.isMaster) {
+			await emitTauriEvent(EV_COMMAND, { action: 'preview-effect' });
+			return;
+		}
+		await enterOverlayMode();
+		await this.playBreakEffect(customWords);
+	}
+
 	destroy() {
+		this.cancelEffect();
 		this.generation++;
 		if (this.timerInterval) {
 			clearInterval(this.timerInterval);

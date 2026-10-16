@@ -164,3 +164,39 @@ export async function setOverlayOpacity(alpha: number): Promise<void> {
 	await tauriInvoke('native_overlay_set_opacity', { alpha });
 }
 
+export interface OverlayExpandOptions {
+	width?: number;
+	height?: number;
+	scale?: number;
+}
+
+/**
+ * Generalized helper to expand the overlay window (for settings menu or break effect).
+ * Direction-aware: expands left if placed on the right of the screen, expands upwards
+ * if placed in the bottom half of the screen, and clamps to monitor boundaries.
+ * Backs up pre-expansion coordinates and locks window-state tracking while expanded.
+ */
+export async function expandOverlayWindow(options?: OverlayExpandOptions | number): Promise<void> {
+	if (typeof options === 'number') {
+		await tauriInvoke('expand_overlay_window', { scale: options });
+	} else {
+		await tauriInvoke('expand_overlay_window', {
+			width: options?.width,
+			height: options?.height,
+			scale: options?.scale
+		});
+	}
+}
+
+/**
+ * Generalized helper to restore the overlay window back to compact idle dimensions
+ * and pre-expansion coordinates.
+ */
+export async function restoreOverlayWindow(): Promise<void> {
+	await tauriInvoke('restore_overlay_window');
+}
+
+/** Backward-compatible aliases */
+export const expandOverlayForEffect = (scale: number = 5) => expandOverlayWindow({ scale });
+export const restoreOverlayAfterEffect = () => restoreOverlayWindow();
+

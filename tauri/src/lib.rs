@@ -122,8 +122,10 @@ pub fn run() {
 
                     mutate_window_state(app, |state| {
                         if window.label() == "overlay" {
-                            state.minimalist.x = Some(x);
-                            state.minimalist.y = Some(y);
+                            if !window_state::is_expand_on() {
+                                state.minimalist.x = Some(x);
+                                state.minimalist.y = Some(y);
+                            }
                         } else if window.label() == "main" {
                             state.normal.x = Some(x);
                             state.normal.y = Some(y);
@@ -151,6 +153,10 @@ pub fn run() {
             window_state::enter_overlay_mode,
             window_state::exit_overlay_mode,
             window_state::set_overlay_size,
+            window_state::expand_overlay_window,
+            window_state::restore_overlay_window,
+            window_state::expand_overlay_for_effect,
+            window_state::restore_overlay_after_effect,
             window_state::native_overlay_start_drag,
             native::native_overlay_set_opacity,
             settings::get_setting,

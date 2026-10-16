@@ -1,6 +1,7 @@
 import {
 	DEFAULT_SETTINGS,
 	DEFAULT_STATS,
+	EFFECT_WORD_DURATION_SEC_OPTIONS,
 	EYE_DURATION_SEC_OPTIONS,
 	EYE_INTERVAL_MIN_OPTIONS,
 	SOUND_PRESETS,
@@ -129,6 +130,19 @@ export function normalizeSettings(raw: unknown): Settings {
 			? s.statsRetention
 			: 'forever';
 
+	const effectWords = Array.isArray(s.effectWords)
+		? s.effectWords
+				.map((w) => String(w).trim().toUpperCase())
+				.filter(Boolean)
+		: typeof s.effectWords === 'string'
+			? (s.effectWords as string)
+					.split(/[,;\n]+/)
+					.map((w) => w.trim().toUpperCase())
+					.filter(Boolean)
+			: fallback.effectWords;
+
+	const validEffectWords = effectWords.length > 0 ? effectWords : fallback.effectWords;
+
 	return {
 		eyeEnabled: bool(s.eyeEnabled, fallback.eyeEnabled),
 		eyeIntervalMin: snap(s.eyeIntervalMin, EYE_INTERVAL_MIN_OPTIONS, fallback.eyeIntervalMin),
@@ -152,6 +166,12 @@ export function normalizeSettings(raw: unknown): Settings {
 		idleThresholdSec: num(s.idleThresholdSec, fallback.idleThresholdSec, 30, 3600),
 		overlayOpacity: num(s.overlayOpacity, fallback.overlayOpacity, 0.2, 1),
 		hud2x: bool(s.hud2x, fallback.hud2x),
+		effectWords: validEffectWords,
+		effectWordDurationSec: snap(
+			s.effectWordDurationSec,
+			EFFECT_WORD_DURATION_SEC_OPTIONS,
+			fallback.effectWordDurationSec
+		),
 		statsRetention: retention
 	};
 }
