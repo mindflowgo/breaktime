@@ -1,6 +1,6 @@
 <script lang="ts">
 	interface Props {
-		/** Progress from 1.0 (full ring) down to 0.0 (empty ring) for break timer */
+		/** Progress from 1.0 down to 0.0 for break timer (preserved for interface compatibility) */
 		progress?: number;
 		/**
 		 * Upper eyelid closure 0.0 (fully open) to 1.0 (fully closed) — the
@@ -8,7 +8,7 @@
 		 * the moment the break fires.
 		 */
 		droop?: number;
-		/** Whether the eye break countdown is currently running (2Hz blink) */
+		/** Whether the eye break countdown is currently running (triggers quick eyelid blinking) */
 		isBreakActive?: boolean;
 		/** Whether user is idle/away */
 		isIdle?: boolean;
@@ -24,17 +24,59 @@
 		class: className = ''
 	}: Props = $props();
 
-	// Iris center & countdown pomo ring geometry around iris
+	// Iris center
 	const CX = 50;
 	const CY = 34;
-	const RING_RADIUS = 22.5;
-	const CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS; // ~141.37
 
-	// Clamp progress between 0 and 1
-	let clampedProgress = $derived(Math.max(0, Math.min(1, progress)));
+	// Animated droop to simulate natural eye-blinking during active break
+	let breakDroop = $state(0);
 
-	// Clamp droop between 0 (fully open) and 1 (fully closed)
-	let clampedDroop = $derived(Math.max(0, Math.min(1, droop)));
+	$effect(() => {
+		if (!isBreakActive) {
+			breakDroop = 0;
+			return;
+		}
+
+		let rafId: number;
+		let startTime = performance.now();
+		// Rhythmic blink cycle (~1.1s total period)
+		const CYCLE_MS = 1100;
+		// 325ms blink action: 140ms close + 35ms hold + 150ms open
+		const BLINK_START = 600;
+		const BLINK_CLOSE = 740;
+		const BLINK_HOLD = 775;
+		const BLINK_OPEN = 925;
+
+		const tick = (now: number) => {
+			const elapsed = (now - startTime) % CYCLE_MS;
+			if (elapsed < BLINK_START) {
+				breakDroop = 0;
+			} else if (elapsed < BLINK_CLOSE) {
+				// Eyelid droops down quickly to close
+				const t = (elapsed - BLINK_START) / (BLINK_CLOSE - BLINK_START);
+				breakDroop = t * t * (3 - 2 * t);
+			} else if (elapsed < BLINK_HOLD) {
+				breakDroop = 1;
+			} else if (elapsed < BLINK_OPEN) {
+				// Eyelid returns up quickly to open
+				const t = (elapsed - BLINK_HOLD) / (BLINK_OPEN - BLINK_HOLD);
+				breakDroop = 1 - t * t * (3 - 2 * t);
+			} else {
+				breakDroop = 0;
+			}
+			rafId = requestAnimationFrame(tick);
+		};
+
+		rafId = requestAnimationFrame(tick);
+		return () => {
+			cancelAnimationFrame(rafId);
+			breakDroop = 0;
+		};
+	});
+
+	// Use dynamic breakDroop during break mode, or idle countdown droop during normal tracking
+	let effectiveDroop = $derived(isBreakActive ? breakDroop : droop);
+	let clampedDroop = $derived(Math.max(0, Math.min(1, effectiveDroop)));
 
 	// Reference-accurate spherical curve control point:
 	// Quadratic formula fits: (droop=0 -> cpY=6), (droop=0.5 -> cpY=26), (droop=1.0 -> cpY=60).
@@ -45,12 +87,6 @@
 	// - At droop=1.00 (0% time left): apex Y=53.5 (100% closed against bottom contour)
 	let eyelidCpY = $derived((6 + 26 * clampedDroop + 28 * clampedDroop * clampedDroop).toFixed(2));
 	let eyelidPathD = $derived(`M 6 34 C 24 6, 76 6, 94 34 C 76 ${eyelidCpY}, 24 ${eyelidCpY}, 6 34 Z`);
-
-	// Ring countdown: visible length starts at full CIRCUMFERENCE and shrinks to 0.
-	// As progress decreases, the start angle moves clockwise from 12 o'clock (-90deg),
-	// pulling away from top and moving clockwise until empty.
-	let visibleLength = $derived(CIRCUMFERENCE * clampedProgress);
-	let startAngle = $derived(-90 + (1 - clampedProgress) * 360);
 </script>
 
 <div
@@ -74,10 +110,6 @@
 			data-tauri-drag-region
 		>
 			<defs>
-				<!-- Glow for warm orange countdown ring -->
-				<filter id="pomo-orange-glow" x="-30%" y="-30%" width="160%" height="160%">
-					<feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#f97316" flood-opacity="0.9" />
-				</filter>
 				<!-- Soft contrast shadow for eye contour over any desktop wallpaper -->
 				<filter id="eye-contrast-shadow" x="-20%" y="-20%" width="140%" height="140%">
 					<feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.45" />
@@ -106,13 +138,8 @@
 				filter="url(#eye-contrast-shadow)"
 			/>
 
-			<!-- Eyeball socket contents clipped to sclera.
-			     During a break the whole group blinks twice a second. -->
-			<g
-				clip-path="url(#sclera-clip)"
-				class={isBreakActive ? 'eye-break-blink' : ''}
-				style="transform-origin: 50px 34px;"
-			>
+			<!-- Eyeball socket contents clipped to sclera. -->
+			<g clip-path="url(#sclera-clip)">
 				<!-- Vibrant Cyan Iris (centered at 50, 34; radius: 21) -->
 				<circle cx={CX} cy={CY} r="21" fill="url(#irisGrad)" />
 
@@ -122,36 +149,7 @@
 				<!-- Pure White Specular Highlight at top-right of pupil -->
 				<circle cx="56.5" cy="24.5" r="3.2" fill="#ffffff" />
 
-				<!-- POMO TIMER RING around the iris (during active eye break) -->
-				{#if isBreakActive && clampedProgress > 0}
-					<!-- Subtle track underneath -->
-					<circle
-						cx={CX}
-						cy={CY}
-						r={RING_RADIUS}
-						stroke="rgba(255, 153, 87, 0.25)"
-						stroke-width="3"
-						fill="none"
-					/>
-
-					<!-- Decreasing Orange Ring: pulls back from top then clockwise it moves away -->
-					<circle
-						cx={CX}
-						cy={CY}
-						r={RING_RADIUS}
-						stroke="#f97316"
-						stroke-width="3.5"
-						stroke-linecap="round"
-						stroke-dasharray="{visibleLength} {CIRCUMFERENCE}"
-						stroke-dashoffset="0"
-						transform="rotate({startAngle} {CX} {CY})"
-						fill="none"
-						filter="url(#pomo-orange-glow)"
-						class="transition-[stroke-dasharray,transform] duration-300 ease-linear"
-					/>
-				{/if}
-
-				<!-- Drooping Upper Eyelid: covers eyeball proportional to countdown time elapsed -->
+				<!-- Upper Eyelid: droops as idle countdown or blinks down quickly during eye break -->
 				{#if clampedDroop > 0.005}
 					<path d={eyelidPathD} fill="url(#upperEyelidGrad)" />
 				{/if}
@@ -177,25 +175,3 @@
 		</svg>
 	{/if}
 </div>
-
-<style>
-	/* Break mode: the eye blinks twice per second for the whole break
-	   duration — one close-open cycle every 0.5s. */
-	.eye-break-blink {
-		animation: eyeBreakBlink 0.5s ease-in-out infinite;
-	}
-
-	@keyframes eyeBreakBlink {
-		0%,
-		30% {
-			transform: scaleY(1);
-		}
-		50% {
-			transform: scaleY(0.06);
-		}
-		70%,
-		100% {
-			transform: scaleY(1);
-		}
-	}
-</style>
